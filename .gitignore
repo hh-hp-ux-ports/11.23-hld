@@ -1,0 +1,18 @@
+# build output
+/build/
+
+# HP system binaries (crt0.o, dld.so, libc.so.1, ...) for offline study — not
+# redistributable, and large. Regenerate with: sh scripts/recon.sh <workdir>
+# (run on an HP-UX 11.23/Itanium system), then copy sys_* into samples/sys/.
+/samples/sys/
+
+# per-checkout test configuration (see tests/local.conf.example)
+/tests/local.conf
+
+# raw command-output captures used while writing docs/ — not shipped; the
+# facts they support are written up by hand in docs/*.md
+/docs/ground-truth/
+
+# editor/scratch
+*.swp
+*~

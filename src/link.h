@@ -1,0 +1,100 @@
+/*
+ * link.h — hld's internal link state: input pieces, output sections,
+ * the symbol table, and the layout/emit entry points.
+ */
+#ifndef HLD_LINK_H
+#define HLD_LINK_H
+
+#include "elf64.h"
+
+/* HP-UX/IPF LP64 address space (docs/format-notes.md). */
+#define HLD_TEXT_BASE 0x4000000000000000ULL
+#define HLD_DATA_BASE 0x6000000000000000ULL
+#define HLD_SEG_ALIGN 0x10000ULL   /* file offset must be congruent to vaddr */
+
+struct osec;
+
+/* One input section contributing to an output section. */
+typedef struct isec {
+    hld_elf *obj;
+    uint32_t idx;             /* section index within obj */
+    const hld_shdr *sh;
+    uint64_t out_off;         /* offset within the output section */
+    struct osec *out;
+    struct isec *next;        /* next contribution to the same output section */
+} isec;
+
+typedef struct osec {
+    const char *name;
+    uint32_t type;
+    uint64_t flags;
+    uint64_t addr, off, size, align, entsize;
+    uint32_t shndx;           /* index in the output section header table */
+    uint8_t *data;            /* materialized contents (NULL for NOBITS) */
+    isec *first, **tail;      /* contributions in link order */
+    struct osec *next;
+} osec;
+
+typedef enum {
+    HLD_SYM_UNDEF,            /* referenced, not yet defined */
+    HLD_SYM_DEFINED,          /* defined by an input section */
+    HLD_SYM_ABS,              /* absolute value (linker-defined or SHN_ABS) */
+    HLD_SYM_COMMON            /* tentative definition, not yet allocated */
+} hld_symkind;
+
+typedef struct hld_gsym {
+    const char *name;
+    hld_symkind kind;
+    uint64_t value;           /* final address (ABS: the value itself) */
+    uint64_t size;
+    uint8_t type, bind, other;
+    isec *in;                 /* defining input section (DEFINED) */
+    uint64_t in_off;          /* offset within that input section */
+    hld_elf *obj;             /* defining object, for diagnostics */
+    struct hld_gsym *next;    /* hash chain */
+} hld_gsym;
+
+#define HLD_SYMHASH 1021
+
+typedef struct {
+    /* inputs */
+    hld_elf **objs;
+    size_t nobjs, objs_cap;
+
+    /* outputs */
+    osec *osecs, **osec_tail;
+    size_t nosecs;
+
+    hld_gsym *hash[HLD_SYMHASH];
+
+    /* layout results */
+    uint64_t text_addr, text_end, text_filesz;
+    uint64_t data_addr, data_off, data_filesz, data_memsz;
+    uint64_t entry;
+    uint64_t gp;
+
+    /* options */
+    const char *out_path;
+    const char *entry_name;
+    int trapnil;              /* -z */
+    int map;                  /* -m */
+    int verbose;
+
+    char err[HLD_ERRSZ];
+} hld_link;
+
+/* link.c */
+int  hld_add_object(hld_link *L, const char *path);
+int  hld_collect_sections(hld_link *L);
+int  hld_resolve_symbols(hld_link *L);
+int  hld_layout(hld_link *L);
+int  hld_build_contents(hld_link *L);
+int  hld_relocate(hld_link *L);
+void hld_print_map(hld_link *L);
+void hld_link_free(hld_link *L);
+hld_gsym *hld_sym_lookup(hld_link *L, const char *name);
+
+/* write.c */
+int  hld_write_exec(hld_link *L);
+
+#endif /* HLD_LINK_H */

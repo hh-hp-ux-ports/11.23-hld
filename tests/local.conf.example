@@ -1,0 +1,8 @@
+# Optional local test configuration.
+#
+# Copy to tests/local.conf (gitignored) and adjust if you have an ia64-hpux
+# cross toolchain installed somewhere not on PATH. Without this, the tests
+# that need it are skipped rather than failing.
+#
+# XAS=/path/to/ia64-hp-hpux11.23-as
+# CROSS_READELF=/path/to/ia64-hp-hpux11.23-readelf

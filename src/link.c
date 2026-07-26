@@ -1,0 +1,699 @@
+/*
+ * link.c — section collection, symbol resolution, address assignment and
+ * relocation application.
+ *
+ * Scope note: this is the static-executable path. DLT (GOT) and function
+ * descriptor (.opd) construction, archives and dynamic output are not here
+ * yet, so relocations that require them are rejected loudly rather than
+ * mis-applied.
+ */
+#include "port.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "link.h"
+#include "ia64_patch.h"
+
+#define U(x) ((unsigned long long)(x))
+
+static void lerr(hld_link *L, const char *fmt, const char *a, const char *b)
+{
+    snprintf(L->err, HLD_ERRSZ, fmt, a ? a : "", b ? b : "");
+}
+
+static uint64_t align_up(uint64_t v, uint64_t a)
+{
+    return (a < 2) ? v : ((v + a - 1) & ~(a - 1));
+}
+
+static char *xstrdup(const char *s)
+{
+    size_t n = strlen(s) + 1;
+    char *p = malloc(n);
+    if (p) memcpy(p, s, n);
+    return p;
+}
+
+/* ---- inputs ------------------------------------------------------------ */
+
+int hld_add_object(hld_link *L, const char *path)
+{
+    hld_elf *e;
+    char err[HLD_ERRSZ];
+
+    e = hld_elf_load(path, err);
+    if (!e) { snprintf(L->err, HLD_ERRSZ, "%s", err); return -1; }
+    if (e->eh.type != ET_REL) {
+        lerr(L, "%s: not a relocatable object (hld links objects only so far)",
+             path, NULL);
+        hld_elf_free(e);
+        return -1;
+    }
+    if (e->eh.machine != EM_IA_64) {
+        lerr(L, "%s: not an IA-64 object", path, NULL);
+        hld_elf_free(e);
+        return -1;
+    }
+    if (!(e->eh.flags & EF_IA_64_ABI64)) {
+        lerr(L, "%s: not an LP64 object (ILP32 input; hld is LP64-only)",
+             path, NULL);
+        hld_elf_free(e);
+        return -1;
+    }
+    if (L->nobjs == L->objs_cap) {
+        size_t nc = L->objs_cap ? L->objs_cap * 2 : 8;
+        hld_elf **na = realloc(L->objs, nc * sizeof *na);
+        if (!na) { lerr(L, "out of memory", NULL, NULL); hld_elf_free(e); return -1; }
+        L->objs = na;
+        L->objs_cap = nc;
+    }
+    L->objs[L->nobjs++] = e;
+    return 0;
+}
+
+/* ---- output sections --------------------------------------------------- */
+
+static osec *osec_find(hld_link *L, const char *name)
+{
+    osec *o;
+    for (o = L->osecs; o; o = o->next)
+        if (strcmp(o->name, name) == 0)
+            return o;
+    return NULL;
+}
+
+static osec *osec_get(hld_link *L, const char *name, uint32_t type, uint64_t flags)
+{
+    osec *o = osec_find(L, name);
+
+    if (o) {
+        /* NOBITS + PROGBITS with the same name: PROGBITS wins the type. */
+        if (o->type == SHT_NOBITS && type != SHT_NOBITS)
+            o->type = type;
+        o->flags |= flags;
+        return o;
+    }
+    o = calloc(1, sizeof *o);
+    if (!o) return NULL;
+    o->name = name;
+    o->type = type;
+    o->flags = flags;
+    o->align = 1;
+    o->tail = &o->first;
+    *L->osec_tail = o;
+    L->osec_tail = &o->next;
+    L->nosecs++;
+    return o;
+}
+
+/*
+ * Output order. Within a segment, sections keep the order they are first
+ * seen except that NOBITS is forced last (it has no file image). The text
+ * segment holds alloc sections without SHF_WRITE, the data segment the rest.
+ */
+static int sec_is_text(uint64_t flags)
+{
+    return (flags & SHF_ALLOC) && !(flags & SHF_WRITE);
+}
+
+int hld_collect_sections(hld_link *L)
+{
+    size_t i;
+    uint32_t j;
+
+    for (i = 0; i < L->nobjs; i++) {
+        hld_elf *e = L->objs[i];
+        for (j = 1; j < e->eh.shnum; j++) {
+            hld_shdr *sh = &e->shdrs[j];
+            osec *o;
+            isec *in;
+
+            if (!(sh->flags & SHF_ALLOC))
+                continue;   /* debug/comment/reloc/symtab: not laid out */
+            if (sh->type == SHT_GROUP)
+                continue;
+
+            o = osec_get(L, sh->name, sh->type, sh->flags);
+            if (!o) { lerr(L, "out of memory", NULL, NULL); return -1; }
+            if (sh->addralign > o->align) o->align = sh->addralign;
+            if (sh->entsize && !o->entsize) o->entsize = sh->entsize;
+
+            in = calloc(1, sizeof *in);
+            if (!in) { lerr(L, "out of memory", NULL, NULL); return -1; }
+            in->obj = e;
+            in->idx = j;
+            in->sh = sh;
+            in->out = o;
+            /* place this contribution at the current end of the output */
+            in->out_off = align_up(o->size, sh->addralign ? sh->addralign : 1);
+            o->size = in->out_off + sh->size;
+            *o->tail = in;
+            o->tail = &in->next;
+        }
+    }
+    return 0;
+}
+
+/* ---- symbols ----------------------------------------------------------- */
+
+static unsigned symhash(const char *s)
+{
+    unsigned h = 5381;
+    while (*s) h = h * 33 + (unsigned char)*s++;
+    return h % HLD_SYMHASH;
+}
+
+hld_gsym *hld_sym_lookup(hld_link *L, const char *name)
+{
+    hld_gsym *g;
+    for (g = L->hash[symhash(name)]; g; g = g->next)
+        if (strcmp(g->name, name) == 0)
+            return g;
+    return NULL;
+}
+
+static hld_gsym *sym_intern(hld_link *L, const char *name)
+{
+    unsigned h = symhash(name);
+    hld_gsym *g = hld_sym_lookup(L, name);
+
+    if (g) return g;
+    g = calloc(1, sizeof *g);
+    if (!g) return NULL;
+    g->name = xstrdup(name);
+    if (!g->name) { free(g); return NULL; }
+    g->kind = HLD_SYM_UNDEF;
+    g->next = L->hash[h];
+    L->hash[h] = g;
+    return g;
+}
+
+/* Find the input-section record for (obj, shndx). */
+static isec *isec_of(hld_link *L, hld_elf *obj, uint32_t shndx)
+{
+    osec *o;
+    isec *in;
+
+    for (o = L->osecs; o; o = o->next)
+        for (in = o->first; in; in = in->next)
+            if (in->obj == obj && in->idx == shndx)
+                return in;
+    return NULL;
+}
+
+int hld_resolve_symbols(hld_link *L)
+{
+    size_t i;
+    uint32_t j;
+    hld_gsym *g;
+    unsigned h;
+
+    for (i = 0; i < L->nobjs; i++) {
+        hld_elf *e = L->objs[i];
+        for (j = 1; j < e->eh.shnum; j++) {
+            hld_sym *syms;
+            size_t n, k;
+            char err[HLD_ERRSZ];
+
+            if (e->shdrs[j].type != SHT_SYMTAB) continue;
+            syms = hld_read_syms(e, &e->shdrs[j], &n, err);
+            if (!syms) { snprintf(L->err, HLD_ERRSZ, "%s", err); return -1; }
+
+            for (k = 0; k < n; k++) {
+                hld_sym *s = &syms[k];
+                uint8_t bind = ELF64_ST_BIND(s->info);
+                uint8_t type = ELF64_ST_TYPE(s->info);
+
+                if (bind == STB_LOCAL) continue;
+                if (!s->name[0]) continue;
+
+                g = sym_intern(L, s->name);
+                if (!g) { lerr(L, "out of memory", NULL, NULL); free(syms); return -1; }
+
+                if (s->shndx == SHN_UNDEF) {
+                    if (g->kind == HLD_SYM_UNDEF && bind == STB_WEAK)
+                        g->bind = STB_WEAK;
+                    continue;
+                }
+                if (s->shndx == SHN_COMMON) {
+                    if (g->kind == HLD_SYM_UNDEF
+                        || (g->kind == HLD_SYM_COMMON && s->size > g->size)) {
+                        g->kind = HLD_SYM_COMMON;
+                        g->size = s->size;
+                        g->value = s->value ? s->value : 8; /* alignment */
+                        g->type = type;
+                        g->bind = bind;
+                        g->obj = e;
+                    }
+                    continue;
+                }
+                /* a real definition */
+                if (g->kind == HLD_SYM_DEFINED || g->kind == HLD_SYM_ABS) {
+                    if (bind == STB_WEAK) continue;       /* keep the strong one */
+                    if (g->bind != STB_WEAK) {
+                        lerr(L, "duplicate definition of `%s'", g->name, NULL);
+                        free(syms);
+                        return -1;
+                    }
+                }
+                if (s->shndx == SHN_ABS) {
+                    g->kind = HLD_SYM_ABS;
+                    g->value = s->value;
+                } else {
+                    isec *in = isec_of(L, e, s->shndx);
+                    if (!in) continue;   /* defined in a non-alloc section */
+                    g->kind = HLD_SYM_DEFINED;
+                    g->in = in;
+                    g->in_off = s->value;
+                }
+                g->size = s->size;
+                g->type = type;
+                g->bind = bind;
+                g->other = s->other;
+                g->obj = e;
+            }
+            free(syms);
+        }
+    }
+
+    /* Allocate COMMON into .bss now that all sizes are known. */
+    for (h = 0; h < HLD_SYMHASH; h++) {
+        for (g = L->hash[h]; g; g = g->next) {
+            osec *bss;
+            isec *in;
+
+            if (g->kind != HLD_SYM_COMMON) continue;
+            bss = osec_get(L, ".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE);
+            if (!bss) { lerr(L, "out of memory", NULL, NULL); return -1; }
+            if (g->value > bss->align) bss->align = g->value;
+            in = calloc(1, sizeof *in);
+            if (!in) { lerr(L, "out of memory", NULL, NULL); return -1; }
+            in->obj = g->obj;
+            in->idx = 0;                 /* synthetic: no input section */
+            in->sh = NULL;
+            in->out = bss;
+            in->out_off = align_up(bss->size, g->value ? g->value : 8);
+            bss->size = in->out_off + g->size;
+            *bss->tail = in;
+            bss->tail = &in->next;
+            g->kind = HLD_SYM_DEFINED;
+            g->in = in;
+            g->in_off = 0;
+        }
+    }
+    return 0;
+}
+
+/* ---- layout ------------------------------------------------------------ */
+
+static int def_abs(hld_link *L, const char *name, uint64_t val)
+{
+    hld_gsym *g = sym_intern(L, name);
+    if (!g) { lerr(L, "out of memory", NULL, NULL); return -1; }
+    if (g->kind == HLD_SYM_DEFINED) return 0;  /* an object defined it: respect that */
+    g->kind = HLD_SYM_ABS;
+    g->value = val;
+    g->bind = STB_GLOBAL;
+    return 0;
+}
+
+/*
+ * Assign addresses. The text segment is mapped from file offset 0 so the ELF
+ * header and program headers share its first page (as HP ld does); the data
+ * segment starts at the next HLD_SEG_ALIGN boundary, keeping file offset
+ * congruent to vaddr modulo that alignment.
+ */
+int hld_layout(hld_link *L)
+{
+    uint64_t addr, off;
+    osec *o;
+    hld_gsym *g;
+    unsigned h;
+    int nphdr = 3;   /* PHDR + LOAD text + LOAD data */
+
+    /* text segment */
+    off = (uint64_t)EHDR64_SIZE + (uint64_t)nphdr * PHDR64_SIZE;
+    addr = HLD_TEXT_BASE + off;
+    L->text_addr = HLD_TEXT_BASE;
+
+    for (o = L->osecs; o; o = o->next) {
+        if (!sec_is_text(o->flags)) continue;
+        if (o->type == SHT_NOBITS) continue;    /* no NOBITS in text */
+        addr = align_up(addr, o->align);
+        off = align_up(off, o->align);
+        o->addr = addr;
+        o->off = off;
+        addr += o->size;
+        off += o->size;
+    }
+    L->text_end = addr;
+    L->text_filesz = off;
+
+    /* data segment: file offset congruent to vaddr mod HLD_SEG_ALIGN */
+    off = align_up(off, HLD_SEG_ALIGN);
+    addr = HLD_DATA_BASE;
+    L->data_addr = addr;
+    L->data_off = off;
+
+    for (o = L->osecs; o; o = o->next) {
+        if (sec_is_text(o->flags) || !(o->flags & SHF_ALLOC)) continue;
+        if (o->type == SHT_NOBITS) continue;    /* placed after PROGBITS */
+        addr = align_up(addr, o->align);
+        off = align_up(off, o->align);
+        o->addr = addr;
+        o->off = off;
+        addr += o->size;
+        off += o->size;
+    }
+    L->data_filesz = off - L->data_off;
+
+    for (o = L->osecs; o; o = o->next) {
+        if (sec_is_text(o->flags) || !(o->flags & SHF_ALLOC)) continue;
+        if (o->type != SHT_NOBITS) continue;
+        addr = align_up(addr, o->align);
+        o->addr = addr;
+        o->off = off;                            /* no file image */
+        addr += o->size;
+    }
+    L->data_memsz = addr - L->data_addr;
+
+    /*
+     * __gp anchors short-data addressing. Place it so the +-2MB addl window
+     * covers the short sections; with none present, the data segment start is
+     * the natural choice.
+     */
+    L->gp = L->data_addr + 0x10;
+
+    /* Linker-defined symbols (docs/format-notes.md). */
+    if (def_abs(L, "__text_start", L->text_addr) < 0) return -1;
+    if (def_abs(L, "__text_start_f", L->text_addr) < 0) return -1;
+    if (def_abs(L, "_etext", L->text_end) < 0) return -1;
+    if (def_abs(L, "_etext_f", L->text_end) < 0) return -1;
+    if (def_abs(L, "__data_start", L->data_addr) < 0) return -1;
+    if (def_abs(L, "_edata", L->data_addr + L->data_filesz) < 0) return -1;
+    if (def_abs(L, "_end", L->data_addr + L->data_memsz) < 0) return -1;
+    if (def_abs(L, "__gp", L->gp) < 0) return -1;
+
+    /* Final addresses for section-relative symbols. */
+    for (h = 0; h < HLD_SYMHASH; h++)
+        for (g = L->hash[h]; g; g = g->next)
+            if (g->kind == HLD_SYM_DEFINED && g->in)
+                g->value = g->in->out->addr + g->in->out_off + g->in_off;
+
+    /* Entry point. */
+    g = hld_sym_lookup(L, L->entry_name);
+    if (!g || g->kind == HLD_SYM_UNDEF) {
+        lerr(L, "entry symbol `%s' is not defined", L->entry_name, NULL);
+        return -1;
+    }
+    L->entry = g->value;
+
+    /* Undefined symbols are fatal in a static link. */
+    for (h = 0; h < HLD_SYMHASH; h++)
+        for (g = L->hash[h]; g; g = g->next)
+            if (g->kind == HLD_SYM_UNDEF && g->bind != STB_WEAK) {
+                lerr(L, "undefined symbol `%s'", g->name, NULL);
+                return -1;
+            }
+    return 0;
+}
+
+/* ---- relocation -------------------------------------------------------- */
+
+/* Address of a symbol referenced by relocation `r' in object `e'. */
+static int reloc_symval(hld_link *L, hld_elf *e, const hld_shdr *symsh,
+                        hld_sym *syms, size_t nsyms, const hld_rela *r,
+                        uint64_t *out, const char **name)
+{
+    hld_sym *s;
+    isec *in;
+    hld_gsym *g;
+
+    (void)symsh;
+    if (r->sym == 0) { *out = 0; *name = "<none>"; return 0; }
+    if (r->sym >= nsyms) {
+        lerr(L, "%s: relocation references symbol out of range", e->path, NULL);
+        return -1;
+    }
+    s = &syms[r->sym];
+    *name = s->name;
+
+    if (ELF64_ST_BIND(s->info) != STB_LOCAL && s->name[0]) {
+        g = hld_sym_lookup(L, s->name);
+        if (g && (g->kind == HLD_SYM_DEFINED || g->kind == HLD_SYM_ABS)) {
+            *out = g->value;
+            return 0;
+        }
+        if (g && g->bind == STB_WEAK) { *out = 0; return 0; }
+        lerr(L, "undefined symbol `%s'", s->name, NULL);
+        return -1;
+    }
+    /* local: section-relative */
+    if (s->shndx == SHN_ABS) { *out = s->value; return 0; }
+    if (s->shndx >= e->eh.shnum) {
+        lerr(L, "%s: bad section index in symbol", e->path, NULL);
+        return -1;
+    }
+    in = isec_of(L, e, s->shndx);
+    if (!in) {
+        lerr(L, "%s: relocation against non-allocated section `%s'",
+             e->path, e->shdrs[s->shndx].name);
+        return -1;
+    }
+    *out = in->out->addr + in->out_off + s->value;
+    return 0;
+}
+
+/* ---- section contents -------------------------------------------------- */
+
+/*
+ * Materialize each output section: concatenate its input contributions
+ * (NOBITS and synthetic COMMON pieces contribute zeroes). Relocations are
+ * applied to these buffers, which are then written out verbatim.
+ */
+int hld_build_contents(hld_link *L)
+{
+    osec *o;
+    isec *in;
+    char err[HLD_ERRSZ];
+
+    for (o = L->osecs; o; o = o->next) {
+        if (o->type == SHT_NOBITS || o->size == 0) continue;
+        o->data = calloc(1, (size_t)o->size);
+        if (!o->data) { lerr(L, "out of memory", NULL, NULL); return -1; }
+        for (in = o->first; in; in = in->next) {
+            const uint8_t *src;
+            if (!in->sh || in->sh->type == SHT_NOBITS || in->sh->size == 0)
+                continue;
+            src = hld_sec_data(in->obj, in->sh, err);
+            if (!src) { snprintf(L->err, HLD_ERRSZ, "%s", err); return -1; }
+            memcpy(o->data + in->out_off, src, (size_t)in->sh->size);
+        }
+    }
+    return 0;
+}
+
+int hld_relocate(hld_link *L)
+{
+    size_t i;
+    uint32_t j;
+
+    for (i = 0; i < L->nobjs; i++) {
+        hld_elf *e = L->objs[i];
+        for (j = 1; j < e->eh.shnum; j++) {
+            hld_shdr *rsh = &e->shdrs[j];
+            hld_shdr *tsh;
+            hld_rela *rel;
+            hld_sym *syms;
+            size_t nrel, nsyms, k;
+            isec *in;
+            char err[HLD_ERRSZ];
+            uint8_t *dst;
+
+            if (rsh->type != SHT_RELA) continue;
+            if (rsh->info == 0 || rsh->info >= e->eh.shnum) continue;
+            tsh = &e->shdrs[rsh->info];
+            if (!(tsh->flags & SHF_ALLOC)) continue;   /* e.g. .rela.debug_* */
+
+            in = isec_of(L, e, rsh->info);
+            if (!in || !in->out->data) continue;
+
+            rel = hld_read_relas(e, rsh, &nrel, err);
+            if (!rel) { snprintf(L->err, HLD_ERRSZ, "%s", err); return -1; }
+            if (rsh->link >= e->eh.shnum) {
+                lerr(L, "%s: rela section has no symbol table", e->path, NULL);
+                free(rel);
+                return -1;
+            }
+            syms = hld_read_syms(e, &e->shdrs[rsh->link], &nsyms, err);
+            if (!syms) {
+                snprintf(L->err, HLD_ERRSZ, "%s", err);
+                free(rel);
+                return -1;
+            }
+
+            dst = in->out->data + in->out_off;
+            for (k = 0; k < nrel; k++) {
+                const hld_rela *r = &rel[k];
+                uint64_t S = 0, A = (uint64_t)r->addend, P, V;
+                uint64_t where = in->out->addr + in->out_off + (r->offset & ~3ULL);
+                unsigned slot = (unsigned)(r->offset & 3);
+                const char *sname = "";
+                hld_patch_status st;
+
+                if (reloc_symval(L, e, &e->shdrs[rsh->link], syms, nsyms, r,
+                                 &S, &sname) < 0) {
+                    free(syms); free(rel);
+                    return -1;
+                }
+                P = where;
+
+                switch (r->type) {
+                case R_IA64_NONE:
+                case R_IA64_LDXMOV:
+                    continue;
+
+                case R_IA64_IMM14:
+                case R_IA64_IMM22:
+                case R_IA64_IMM64:
+                case R_IA64_DIR32MSB:
+                case R_IA64_DIR32LSB:
+                case R_IA64_DIR64MSB:
+                case R_IA64_DIR64LSB:
+                    V = S + A;
+                    break;
+
+                case R_IA64_GPREL22:
+                case R_IA64_GPREL64I:
+                case R_IA64_GPREL32MSB:
+                case R_IA64_GPREL32LSB:
+                case R_IA64_GPREL64MSB:
+                case R_IA64_GPREL64LSB:
+                    V = S + A - L->gp;
+                    break;
+
+                case R_IA64_PCREL21B:
+                case R_IA64_PCREL21BI:
+                case R_IA64_PCREL21F:
+                case R_IA64_PCREL21M:
+                case R_IA64_PCREL22:
+                case R_IA64_PCREL60B:
+                case R_IA64_PCREL64I:
+                case R_IA64_PCREL32MSB:
+                case R_IA64_PCREL32LSB:
+                case R_IA64_PCREL64MSB:
+                case R_IA64_PCREL64LSB:
+                    V = S + A - P;
+                    break;
+
+                case R_IA64_SEGREL32MSB:
+                case R_IA64_SEGREL32LSB:
+                case R_IA64_SEGREL64MSB:
+                case R_IA64_SEGREL64LSB: {
+                    uint64_t base = (S >= HLD_DATA_BASE) ? L->data_addr
+                                                         : L->text_addr;
+                    V = S + A - base;
+                    break;
+                }
+
+                case R_IA64_SECREL32MSB:
+                case R_IA64_SECREL32LSB:
+                case R_IA64_SECREL64MSB:
+                case R_IA64_SECREL64LSB:
+                    V = S + A - in->out->addr;
+                    break;
+
+                default:
+                    snprintf(L->err, HLD_ERRSZ,
+                             "%s: relocation %s against `%s' is not implemented yet "
+                             "(needs DLT/function-descriptor support)",
+                             e->path,
+                             hld_reloc_name(r->type) ? hld_reloc_name(r->type)
+                                                     : "of unknown type",
+                             sname);
+                    free(syms); free(rel);
+                    return -1;
+                }
+
+                st = hld_ia64_install_value(dst + (r->offset & ~3ULL), slot, V,
+                                            r->type);
+                if (st == HLD_PATCH_OVERFLOW) {
+                    snprintf(L->err, HLD_ERRSZ,
+                             "%s: relocation %s against `%s' overflows "
+                             "(value 0x%llx at 0x%llx)",
+                             e->path,
+                             hld_reloc_name(r->type) ? hld_reloc_name(r->type) : "?",
+                             sname, U(V), U(where));
+                    free(syms); free(rel);
+                    return -1;
+                }
+                if (st != HLD_PATCH_OK) {
+                    snprintf(L->err, HLD_ERRSZ,
+                             "%s: cannot apply relocation %s against `%s'",
+                             e->path,
+                             hld_reloc_name(r->type) ? hld_reloc_name(r->type) : "?",
+                             sname);
+                    free(syms); free(rel);
+                    return -1;
+                }
+            }
+            free(syms);
+            free(rel);
+        }
+    }
+    return 0;
+}
+
+/* ---- map --------------------------------------------------------------- */
+
+void hld_print_map(hld_link *L)
+{
+    osec *o;
+    unsigned h;
+    hld_gsym *g;
+
+    printf("Entry symbol  : %s = 0x%llx\n", L->entry_name, U(L->entry));
+    printf("\nSegment -- loadable executable\n\n");
+    for (o = L->osecs; o; o = o->next)
+        if (sec_is_text(o->flags) && o->type != SHT_NOBITS)
+            printf("    %-24s 0x%016llx  size 0x%llx\n", o->name, U(o->addr),
+                   U(o->size));
+    printf("\nSegment -- loadable writable\n\n");
+    for (o = L->osecs; o; o = o->next)
+        if (!sec_is_text(o->flags) && (o->flags & SHF_ALLOC))
+            printf("    %-24s 0x%016llx  size 0x%llx%s\n", o->name, U(o->addr),
+                   U(o->size), o->type == SHT_NOBITS ? "  (nobits)" : "");
+    printf("\n    %-24s 0x%016llx\n", "__gp", U(L->gp));
+    printf("\nGlobal symbols\n\n");
+    for (h = 0; h < HLD_SYMHASH; h++)
+        for (g = L->hash[h]; g; g = g->next)
+            if (g->kind == HLD_SYM_DEFINED || g->kind == HLD_SYM_ABS)
+                printf("    %-32s 0x%016llx\n", g->name, U(g->value));
+}
+
+void hld_link_free(hld_link *L)
+{
+    size_t i;
+    osec *o, *on;
+    unsigned h;
+
+    for (i = 0; i < L->nobjs; i++) hld_elf_free(L->objs[i]);
+    free(L->objs);
+    for (o = L->osecs; o; o = on) {
+        isec *in, *inn;
+        on = o->next;
+        for (in = o->first; in; in = inn) { inn = in->next; free(in); }
+        free(o->data);
+        free(o);
+    }
+    for (h = 0; h < HLD_SYMHASH; h++) {
+        hld_gsym *g, *gn;
+        for (g = L->hash[h]; g; g = gn) {
+            gn = g->next;
+            free((void *)g->name);
+            free(g);
+        }
+    }
+}
