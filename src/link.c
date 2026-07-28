@@ -423,7 +423,20 @@ int hld_layout(hld_link *L)
     hld_gsym *g;
     unsigned h;
     /* PHDR + LOAD text + LOAD data, plus INTERP and DYNAMIC when dynamic */
-    uint32_t nphdr = L->dynamic ? 5 : 3;
+    uint32_t nphdr;
+
+    /*
+     * Thread-local sections are a template, copied per thread, so they lead
+     * the data segment and the ordinary sections that follow reuse the
+     * addresses the .tbss part occupies. The first 16 bytes of the template
+     * are reserved — the platform's linker leaves them, and an access
+     * compiled as an offset from the thread pointer expects them to be there.
+     */
+    for (o = L->osecs; o; o = o->next)
+        if ((o->flags & SHF_ALLOC) && (o->flags & SHF_TLS) && o->size)
+            L->has_tls = 1;
+
+    nphdr = (L->dynamic ? 5 : 3) + (L->has_tls ? 1 : 0);
 
     L->nphdr = nphdr;
 
@@ -459,8 +472,36 @@ int hld_layout(hld_link *L)
     L->data_addr = addr;
     L->data_off = off;
 
-#define IS_DATA(o) (!sec_is_text((o)->flags) && ((o)->flags & SHF_ALLOC))
+#define IS_DATA(o) (!sec_is_text((o)->flags) && ((o)->flags & SHF_ALLOC) \
+                    && !((o)->flags & SHF_TLS))
 #define IS_SHORT(o) (((o)->flags & SHF_IA_64_SHORT) != 0)
+
+    if (L->has_tls) {
+        uint64_t tls_end;
+
+        L->tls_base = addr;
+        L->tls_off = off;
+        addr += 16;
+        off += 16;
+
+        for (o = L->osecs; o; o = o->next) {       /* .tdata */
+            if (!(o->flags & SHF_TLS) || o->type == SHT_NOBITS) continue;
+            addr = align_up(addr, o->align);
+            off = align_up(off, o->align);
+            o->addr = addr; o->off = off;
+            addr += o->size; off += o->size;
+        }
+        L->tls_filesz = addr - L->tls_base;
+
+        tls_end = addr;
+        for (o = L->osecs; o; o = o->next) {       /* .tbss */
+            if (!(o->flags & SHF_TLS) || o->type != SHT_NOBITS) continue;
+            tls_end = align_up(tls_end, o->align);
+            o->addr = tls_end; o->off = off;
+            tls_end += o->size;
+        }
+        L->tls_memsz = align_up(tls_end - L->tls_base, 16);
+    }
 
     for (o = L->osecs; o; o = o->next) {          /* long PROGBITS */
         if (!IS_DATA(o) || IS_SHORT(o) || o->type == SHT_NOBITS) continue;
@@ -542,9 +583,9 @@ int hld_layout(hld_link *L)
             if (def_abs(L, bounds[bi].last, hi) < 0) return -1;
         }
     }
-    if (def_abs(L, "__TLS_SIZE", 0) < 0) return -1;
-    if (def_abs(L, "__TLS_INIT_SIZE", 0) < 0) return -1;
-    if (def_abs(L, "__TLS_INIT_START", 0) < 0) return -1;
+    if (def_abs(L, "__TLS_SIZE", L->tls_memsz) < 0) return -1;
+    if (def_abs(L, "__TLS_INIT_SIZE", L->tls_filesz) < 0) return -1;
+    if (def_abs(L, "__TLS_INIT_START", L->tls_base) < 0) return -1;
     if (def_abs(L, "__TLS_INIT_A", 0) < 0) return -1;
     if (def_abs(L, "__TLS_PREALLOC_DTV_A", 0) < 0) return -1;
     if (def_abs(L, "__SYSTEM_ID", 0) < 0) return -1;
@@ -1104,6 +1145,20 @@ int hld_relocate(hld_link *L)
                     V = S - base;
                     break;
                 }
+
+                case R_IA64_TPREL14:
+                case R_IA64_TPREL22:
+                case R_IA64_TPREL64I:
+                case R_IA64_TPREL64MSB:
+                case R_IA64_TPREL64LSB:
+                    if (!L->has_tls) {
+                        snprintf(L->err, HLD_ERRSZ,
+                                 "%s: `%s' is thread-local but no thread-local "
+                                 "storage was laid out", e->path, sname);
+                        goto rfail;
+                    }
+                    V = S - L->tls_base;
+                    break;
 
                 case R_IA64_SECREL32MSB:
                 case R_IA64_SECREL32LSB:

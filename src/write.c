@@ -309,6 +309,9 @@ int hld_write_exec(hld_link *L)
                    0, HLD_TEXT_BASE, L->text_filesz, L->text_filesz, 0x10);
             PUT_PH(PT_LOAD, PF_R | PF_W | PF_HP_MODIFY, L->data_off,
                    L->data_addr, L->data_filesz, L->data_memsz, 0x10);
+            if (L->has_tls)
+                PUT_PH(PT_TLS, PF_R, L->tls_off, L->tls_base,
+                       L->tls_filesz, L->tls_memsz, 0x10);
 #undef PUT_PH
         }
 

@@ -146,6 +146,10 @@ typedef struct {
     uint64_t ndlt, nopd, npltoff;
     osec *dltsec, *opdsec, *pltoffsec;
 
+    /* thread-local storage template */
+    uint64_t tls_base, tls_filesz, tls_memsz, tls_off;
+    int has_tls;
+
     /* layout results */
     uint64_t text_addr, text_end, text_filesz;
     uint64_t data_addr, data_off, data_filesz, data_memsz;
