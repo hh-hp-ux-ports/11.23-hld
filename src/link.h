@@ -135,8 +135,14 @@ typedef struct {
     /* linkage tables */
     lnkent *dlt_hash[HLD_LNKHASH], *dlt, **dlt_tail;
     lnkent *opd_hash[HLD_LNKHASH], *opd, **opd_tail;
-    uint64_t ndlt, nopd;
-    osec *dltsec, *opdsec;
+    /*
+     * Descriptors reached gp-relatively, for @pltoff. HP's compiler calls
+     * external functions this way where gcc emits a direct branch, so an
+     * object from either compiler links.
+     */
+    lnkent *pltoff_hash[HLD_LNKHASH], *pltoff, **pltoff_tail;
+    uint64_t ndlt, nopd, npltoff;
+    osec *dltsec, *opdsec, *pltoffsec;
 
     /* layout results */
     uint64_t text_addr, text_end, text_filesz;

@@ -702,6 +702,11 @@ static lnkent *opd_get(hld_link *L, hld_gsym *g, isec *in, uint64_t off)
                    g, in, off, 0);
 }
 
+static lnkent *pltoff_get(hld_link *L, hld_gsym *g, isec *in, uint64_t off)
+{
+    return lnk_get(L, L->pltoff_hash, &L->pltoff_tail, &L->pltoff,
+                   &L->npltoff, 16, g, in, off, 0);
+}
 
 /* The descriptor allocated for a target, if any. */
 static lnkent *opd_find(hld_link *L, hld_gsym *g, isec *in, uint64_t off)
@@ -758,7 +763,7 @@ int hld_alloc_linkage(hld_link *L)
                 isec *in;
                 uint64_t off;
                 const char *nm;
-                int want_dlt = 0, want_opd = 0;
+                int want_dlt = 0, want_opd = 0, want_pltoff = 0;
 
                 switch (r->type) {
                 case R_IA64_LTOFF22:
@@ -781,6 +786,12 @@ int hld_alloc_linkage(hld_link *L)
                 case R_IA64_FPTR64LSB:
                     want_opd = 1;
                     break;
+                case R_IA64_PLTOFF22:
+                case R_IA64_PLTOFF64I:
+                case R_IA64_PLTOFF64MSB:
+                case R_IA64_PLTOFF64LSB:
+                    want_pltoff = 1;
+                    break;
                 default:
                     continue;
                 }
@@ -790,6 +801,12 @@ int hld_alloc_linkage(hld_link *L)
                 }
                 if (want_opd && !opd_get(L, g, in, off)) goto oom;
                 if (want_dlt && !dlt_get(L, g, in, off, want_opd)) goto oom;
+                /*
+                 * An imported function already has a descriptor in .plt for
+                 * the loader to fill; only a local target needs one made here.
+                 */
+                if (want_pltoff && !(g && g->kind == HLD_SYM_IMPORT)
+                    && !pltoff_get(L, g, in, off)) goto oom;
                 continue;
 oom:
                 lerr(L, "out of memory", NULL, NULL);
@@ -814,6 +831,15 @@ oom:
         L->dltsec->size = L->ndlt * 8;
         L->dltsec->align = 16;
         L->dltsec->entsize = 8;
+    }
+    if (L->npltoff) {
+        /* gp-relative, so it belongs in the short data region */
+        L->pltoffsec = osec_get(L, ".pltoff", SHT_PROGBITS,
+                                SHF_ALLOC | SHF_WRITE | SHF_IA_64_SHORT);
+        if (!L->pltoffsec) { lerr(L, "out of memory", NULL, NULL); return -1; }
+        L->pltoffsec->size = L->npltoff * 16;
+        L->pltoffsec->align = 16;
+        L->pltoffsec->entsize = 16;
     }
     if (L->nopd) {
         L->opdsec = osec_get(L, ".opd", SHT_PROGBITS, SHF_ALLOC);
@@ -862,6 +888,11 @@ int hld_build_contents(hld_link *L)
         for (l = L->opd; l; l = l->next) {
             st64(L->opdsec->data + l->slot, target_addr(l->g, l->in, l->off));
             st64(L->opdsec->data + l->slot + 8, L->gp);
+        }
+    if (L->pltoffsec && L->pltoffsec->data)
+        for (l = L->pltoff; l; l = l->next) {
+            st64(L->pltoffsec->data + l->slot, target_addr(l->g, l->in, l->off));
+            st64(L->pltoffsec->data + l->slot + 8, L->gp);
         }
     if (L->dltsec && L->dltsec->data)
         for (l = L->dlt; l; l = l->next) {
@@ -971,6 +1002,30 @@ int hld_relocate(hld_link *L)
                     ent = dlt_get(L, tg, tin, toff, 1);
                     if (!ent) { lerr(L, "out of memory", NULL, NULL); goto rfail; }
                     V = L->dltsec->addr + ent->slot - L->gp;
+                    break;
+
+                /*
+                 * @pltoff: the gp-relative offset of the function's
+                 * descriptor. An import uses the .plt slot the loader binds;
+                 * anything else uses one built at link time.
+                 */
+                case R_IA64_PLTOFF22:
+                case R_IA64_PLTOFF64I:
+                case R_IA64_PLTOFF64MSB:
+                case R_IA64_PLTOFF64LSB:
+                    if (tg && tg->kind == HLD_SYM_IMPORT) {
+                        if (!L->pltsec) {
+                            snprintf(L->err, HLD_ERRSZ,
+                                     "%s: `%s' needs an import descriptor",
+                                     e->path, sname);
+                            goto rfail;
+                        }
+                        V = L->pltsec->addr + tg->plt_slot - L->gp;
+                    } else {
+                        ent = pltoff_get(L, tg, tin, toff);
+                        if (!ent) { lerr(L, "out of memory", NULL, NULL); goto rfail; }
+                        V = L->pltoffsec->addr + ent->slot - L->gp;
+                    }
                     break;
 
                 /* The descriptor's own address. */

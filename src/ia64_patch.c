@@ -49,6 +49,19 @@ static const struct opnd_desc opnd_tgt25b = /* TGT25b: mod-sched branches */
 static const struct opnd_desc opnd_tgt25c = /* TGT25c: br / br.call */
     { 4, { { 20, 13 }, { 1, 36 }, { 0, 0 }, { 0, 0 } } };
 
+/* The bits an operand occupies, so they can be cleared before insertion. */
+static uint64_t
+opnd_mask(const struct opnd_desc *self)
+{
+    uint64_t m = 0;
+    int i;
+
+    for (i = 0; i < 4 && self->field[i].bits; ++i)
+        m |= ((((uint64_t)1 << self->field[i].bits) - 1)
+              << self->field[i].shift);
+    return m;
+}
+
 /* cpu-ia64-opc.c ins_imms_scaled, verbatim modulo types: scatter the
    sign-extended, scale-shifted value across the fields, LSB first; range
    check via the final sign bit.  */
@@ -272,6 +285,14 @@ hld_ia64_install_value(uint8_t *hit, unsigned slot, uint64_t v, uint32_t r_type)
     }
     dword = le64(hit);
     insn = (dword >> shift) & 0x1ffffffffffULL;
+
+    /*
+     * Clear the operand's bits before inserting. Upstream ORs the value in,
+     * which suits an assembler that leaves a pending field zero — GNU as does,
+     * but HP's assembler leaves a non-zero placeholder there, and OR-ing into
+     * it produces a wrong immediate. Clearing first is correct for both.
+     */
+    insn &= ~opnd_mask(opnd);
 
     if (ins_imms_scaled(opnd, val, &insn) != 0)
         return HLD_PATCH_OVERFLOW;

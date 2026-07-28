@@ -75,6 +75,18 @@ emit addls11 '{ .mii
   addl r36 = 0x54321, r1
   nop.i 0 ;;
 }'
+# HP's assembler leaves a non-zero placeholder in a field awaiting a
+# relocation; patching must replace it, not merge into it.
+emit dirty0 '{ .mii
+  addl r36 = 591, r1
+  nop.i 0
+  nop.i 0 ;;
+}'
+emit dirty1 '{ .mii
+  addl r36 = 0x12345, r1
+  nop.i 0
+  nop.i 0 ;;
+}'
 emit adds0 '{ .mii
   adds r14 = 0, r0
   nop.i 0
@@ -130,7 +142,8 @@ emit brl1 '{ .mlx
 .Lt:'
 
 for f in movl0 movl1 movl2 addl0 addl1 addl2 addls10 addls11 \
-         adds0 adds1 adds2 call0 call1 calln0 calln1 brl0 brl1; do
+         dirty0 dirty1 adds0 adds1 adds2 call0 call1 calln0 calln1 \
+         brl0 brl1; do
     if $XAS -mlp64 -o $W/$f.o $W/$f.s 2> $W/$f.err; then :; else
         echo "FAIL: gas on $f.s:"; cat $W/$f.err; FAIL=1
     fi
@@ -152,6 +165,8 @@ pt gprel64i     $W/movl0.o 0 $W/movl2.o 0 1 0x2b 0xfedcba9876543210
 pt gprel22      $W/addl0.o 0 $W/addl1.o 0 0 0x2a 0x12345
 pt gprel22neg   $W/addl0.o 0 $W/addl2.o 0 0 0x2a 0xfffffffffffffb2e
 pt gprel22ovf   $W/addl0.o 0 $W/addl0.o 0 0 0x2a 0x200000 overflow
+# patching over a non-zero placeholder must replace the field outright
+pt imm22dirty   $W/dirty0.o 0 $W/dirty1.o 0 0 0x22 0x12345
 # imm22 in SLOT 1 — the syllable spanning the t0/t1 dword boundary (bit 46)
 pt gprel22slot1 $W/addls10.o 0 $W/addls11.o 0 1 0x2a 0x54321
 # IMM14 adds, positive / negative
