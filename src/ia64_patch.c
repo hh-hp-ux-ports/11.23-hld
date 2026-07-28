@@ -88,6 +88,52 @@ ins_imms_scaled(const struct opnd_desc *self, uint64_t value, uint64_t *code)
     return 0;
 }
 
+/*
+ * Whether a relocation patches a field inside an instruction bundle. Those
+ * carry the bundle slot in the low two bits of r_offset; every other form
+ * stores a whole word at a plain byte offset, which in debug information is
+ * routinely unaligned. Reading the low bits as a slot there would write the
+ * value in the wrong place.
+ */
+int hld_ia64_reloc_is_insn(uint32_t r_type)
+{
+    switch (r_type) {
+    case R_IA64_IMM14:
+    case R_IA64_IMM22:
+    case R_IA64_IMM64:
+    case R_IA64_GPREL22:
+    case R_IA64_GPREL64I:
+    case R_IA64_LTOFF22:
+    case R_IA64_LTOFF22X:
+    case R_IA64_LTOFF64I:
+    case R_IA64_PLTOFF22:
+    case R_IA64_PLTOFF64I:
+    case R_IA64_FPTR64I:
+    case R_IA64_PCREL21B:
+    case R_IA64_PCREL21BI:
+    case R_IA64_PCREL21F:
+    case R_IA64_PCREL21M:
+    case R_IA64_PCREL22:
+    case R_IA64_PCREL60B:
+    case R_IA64_PCREL64I:
+    case R_IA64_LTOFF_FPTR22:
+    case R_IA64_LTOFF_FPTR64I:
+    case R_IA64_TPREL14:
+    case R_IA64_TPREL22:
+    case R_IA64_TPREL64I:
+    case R_IA64_DTPREL14:
+    case R_IA64_DTPREL22:
+    case R_IA64_DTPREL64I:
+    case R_IA64_LTOFF_TPREL22:
+    case R_IA64_LTOFF_DTPMOD22:
+    case R_IA64_LTOFF_DTPREL22:
+    case R_IA64_LDXMOV:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 hld_patch_status
 hld_ia64_install_value(uint8_t *hit, unsigned slot, uint64_t v, uint32_t r_type)
 {

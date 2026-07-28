@@ -32,6 +32,8 @@ typedef enum {
  * fields are zero. Do not patch the same field twice. The IMM64/PCREL60B
  * paths do clear their fields and are re-patchable.
  */
+int hld_ia64_reloc_is_insn(uint32_t r_type);
+
 hld_patch_status hld_ia64_install_value(uint8_t *hit, unsigned slot,
                                         uint64_t val, uint32_t r_type);
 

@@ -178,6 +178,53 @@ CEOF
     fi
 fi
 
+# --- debug information ----------------------------------------------------
+# Debug sections are not loaded, but dropping them is silent: the link
+# succeeds and the result simply cannot be debugged. They have to be carried
+# through and relocated, and their relocations sit at plain byte offsets
+# rather than the bundle-and-slot offsets an instruction relocation uses.
+CHECKS=`expr $CHECKS + 1`
+cat > $W/dbg.c <<'CEOF'
+#include <stdio.h>
+static int helper(int x) { int y = x * 2; return y + 1; }
+int main(void) { printf("%d\n", helper(20)); return 0; }
+CEOF
+if /opt/gcc474/bin/gcc -mlp64 -g -O0 -c $W/dbg.c -o $W/dbg.o 2> $W/cc.err ||
+   gcc -mlp64 -g -O0 -c $W/dbg.c -o $W/dbg.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -dynamic -e _start -o $W/dbg $W/crt_min.o $W/dbg.o \
+            -L$LIBDIR -lc 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        if $RE -S $W/dbg | grep '\.debug_info' > /dev/null 2>&1; then :; else
+            echo "FAIL: .debug_info did not survive the link"
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        got=`$W/dbg`
+        if [ "$got" != "41" ]; then
+            echo "FAIL: the -g program printed '$got', expected 41"
+            FAIL=1
+        fi
+        # Where a debugger is installed, the real question is whether it can
+        # put a breakpoint on a line of source.
+        if [ -x /opt/langtools/bin/gdb ]; then
+            CHECKS=`expr $CHECKS + 1`
+            echo "break main" > $W/gdb.cmds
+            echo "run" >> $W/gdb.cmds
+            /opt/langtools/bin/gdb -nx --batch -x $W/gdb.cmds $W/dbg \
+                > $W/gdb.out 2>&1
+            if grep 'dbg\.c' $W/gdb.out > /dev/null 2>&1; then :; else
+                echo "FAIL: the debugger could not place main in its source:"
+                head -5 $W/gdb.out
+                FAIL=1
+            fi
+        fi
+    else
+        echo "FAIL: linking a -g object:"; cat $W/link.err
+        FAIL=1
+    fi
+fi
+
 # --- C++: exceptions, iostreams, and another module's data ----------------
 # A C++ program reads the C library's own data — the FILE table behind
 # stdout, the ctype masks, errno — both through linkage-table slots and

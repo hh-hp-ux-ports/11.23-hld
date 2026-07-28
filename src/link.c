@@ -143,8 +143,18 @@ static int collect_sections_of(hld_link *L, hld_elf *e)
             isec *in;
             const char *oname;
 
-            if (!(sh->flags & SHF_ALLOC))
-                continue;   /* debug/comment/reloc/symtab: not laid out */
+            /*
+             * Debug information is not loaded, but it does have to be
+             * carried through and relocated, or the output cannot be
+             * debugged at all — and silently so, since nothing about the
+             * link fails. Other non-allocated sections (.comment, the
+             * relocation and symbol tables) are the linker's own business
+             * and are not copied.
+             */
+            if (!(sh->flags & SHF_ALLOC)
+                && !(sh->type == SHT_PROGBITS
+                     && strncmp(sh->name, ".debug", 6) == 0))
+                continue;
             if (sh->type == SHT_GROUP)
                 continue;
 
@@ -656,6 +666,22 @@ int hld_layout(hld_link *L)
     }
     L->data_memsz = addr - L->data_addr;
 
+    /*
+     * Sections that are not part of the image follow it in the file, with no
+     * address of their own. Their relocations then resolve section-relative,
+     * which is exactly what the debug format's references between sections
+     * are expressed as.
+     */
+    off = L->data_off + L->data_filesz;
+    for (o = L->osecs; o; o = o->next) {
+        if ((o->flags & SHF_ALLOC) || o->type == SHT_NOBITS || !o->size)
+            continue;
+        off = align_up(off, o->align);
+        o->addr = 0;
+        o->off = off;
+        off += o->size;
+    }
+
 #undef IS_DATA
 #undef IS_SHORT
 
@@ -1159,7 +1185,6 @@ int hld_relocate(hld_link *L)
         hld_elf *e = L->objs[i];
         for (j = 1; j < e->eh.shnum; j++) {
             hld_shdr *rsh = &e->shdrs[j];
-            hld_shdr *tsh;
             hld_rela *rel;
             hld_sym *syms;
             size_t nrel, nsyms, k;
@@ -1169,9 +1194,11 @@ int hld_relocate(hld_link *L)
 
             if (rsh->type != SHT_RELA) continue;
             if (rsh->info == 0 || rsh->info >= e->eh.shnum) continue;
-            tsh = &e->shdrs[rsh->info];
-            if (!(tsh->flags & SHF_ALLOC)) continue;   /* e.g. .rela.debug_* */
-
+            /*
+             * Anything collected gets relocated, whether it is loaded or
+             * not; a section that was not collected has no record here and
+             * is skipped below.
+             */
             in = hld_isec_of(L, e, rsh->info);
             if (!in || !in->out->data) continue;
 
@@ -1193,8 +1220,15 @@ int hld_relocate(hld_link *L)
             for (k = 0; k < nrel; k++) {
                 const hld_rela *r = &rel[k];
                 uint64_t S, P, V;
-                uint64_t where = in->out->addr + in->out_off + (r->offset & ~3ULL);
-                unsigned slot = (unsigned)(r->offset & 3);
+                /*
+                 * Only an instruction relocation carries the bundle slot in
+                 * r_offset's low bits; a whole-word store uses the offset as
+                 * it stands, which in debug information is often unaligned.
+                 */
+                int insn = hld_ia64_reloc_is_insn(r->type);
+                uint64_t at = insn ? (r->offset & ~3ULL) : r->offset;
+                uint64_t where = in->out->addr + in->out_off + at;
+                unsigned slot = insn ? (unsigned)(r->offset & 3) : 0;
                 const char *sname = "";
                 hld_gsym *tg;
                 isec *tin;
@@ -1411,8 +1445,7 @@ int hld_relocate(hld_link *L)
                     return -1;
                 }
 
-                st = hld_ia64_install_value(dst + (r->offset & ~3ULL), slot, V,
-                                            r->type);
+                st = hld_ia64_install_value(dst + at, slot, V, r->type);
                 if (st == HLD_PATCH_OVERFLOW) {
                     snprintf(L->err, HLD_ERRSZ,
                              "%s: relocation %s against `%s' overflows "
