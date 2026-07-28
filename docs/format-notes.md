@@ -149,6 +149,31 @@ arrays for lazy binding. hld emits the full set regardless.
 the loader owns — a single word and a 24-byte (three-slot) region
 respectively, in short bss.
 
+### What the executable must provide for a library to load
+
+The C library binds to the executable, not just the other way round. Its
+dynamic symbol table lists `main`, `_end`, `__ARGC`, `__ARGV`, `__ENVP`,
+`__LOAD_INFO`, `__SYSTEM_ID_D` and `__TLS_SIZE_D` as undefined; the loader
+supplies the argument/load-info group itself, but `main` and `_end` must be
+**exported by the executable** or loading fails with "Unsatisfied data
+symbol". An executable therefore has to emit real exports in `.dynsym`, and
+the linker's own symbols are part of that set.
+
+Loadable segments must also carry the HP-specific `p_flags` bits — text
+`PF_HP_CODE`, data `PF_HP_MODIFY` (the platform's linker also sets
+`PF_HP_LAZYSWAP` and bit `0x20000` on text) — and `PT_INTERP` must precede
+the loadable segments.
+
+### Advertising the import relocations
+
+`DT_RELA` and `DT_JMPREL` may name the same relocation array, which is what
+the platform's linker does when binding is deferred. Under **immediate
+binding** that arrangement makes the loader traverse the array twice and
+reject the image ("not a valid load module"); advertising it once through
+`DT_RELA` works. The import descriptor should also be pre-filled
+(`{entry point, gp}`) rather than left zero, and imported symbols are marked
+weak.
+
 ### Calling an imported function
 
 The compiler emits a plain `R_IA64_PCREL21B` direct call to the external

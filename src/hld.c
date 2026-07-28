@@ -68,11 +68,17 @@ int main(int argc, char **argv)
             return 1;
         }
         if (a[0] == '-' && a[1] == 'l') {
-            fprintf(stderr, "hld: %s: libraries are not implemented yet "
-                            "(static objects only)\n", a);
-            return 1;
+            const char *nm = a[2] ? a + 2 : (i + 1 < argc ? argv[++i] : NULL);
+            if (!nm) { fprintf(stderr, "hld: -l needs a name\n"); return 1; }
+            if (hld_find_library(&L, nm) < 0) goto fail;
+            ninputs++;
+            continue;
         }
-        if (a[0] == '-' && a[1] == 'L') { continue; }  /* harmless without -l */
+        if (a[0] == '-' && a[1] == 'L') {
+            const char *dir = a[2] ? a + 2 : (i + 1 < argc ? argv[++i] : NULL);
+            if (dir) hld_add_libpath(&L, dir);
+            continue;
+        }
         if (strcmp(a, "+Accept") == 0 && i + 1 < argc) { ++i; continue; }
 
         fprintf(stderr, "hld: unrecognized option `%s'\n", a);
@@ -84,6 +90,8 @@ int main(int argc, char **argv)
 
     if (hld_collect_sections(&L) < 0) goto fail;
     if (hld_resolve_symbols(&L) < 0) goto fail;
+    if (hld_bind_imports(&L) < 0) goto fail;
+    if (hld_predefine_symbols(&L) < 0) goto fail;
     if (hld_alloc_linkage(&L) < 0) goto fail;
     if (hld_alloc_dynamic(&L) < 0) goto fail;
     if (hld_layout(&L) < 0) goto fail;

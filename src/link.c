@@ -313,6 +313,44 @@ int hld_resolve_symbols(hld_link *L)
 
 /* ---- layout ------------------------------------------------------------ */
 
+/*
+ * The symbols the linker itself provides. They are interned before the
+ * dynamic tables are sized (so they can be exported — the C library binds
+ * to `_end`) and given their values once addresses are known.
+ */
+static const char *const hld_linker_symbols[] = {
+    "__text_start", "__text_start_f", "_etext", "_etext_f",
+    "__data_start", "_edata", "_end", "__gp",
+    /*
+     * The C library binds to these in the executable, so they must exist and
+     * be exported even when the program uses no threads: the platform's own
+     * linker defines exactly this set.
+     */
+    "__init_start", "__init_end", "__fini_start", "__fini_end",
+    "__hp_preinit_start", "__hp_preinit_end",
+    "__TLS_SIZE", "__TLS_INIT_SIZE", "__TLS_INIT_START", "__TLS_INIT_A",
+    "__TLS_PREALLOC_DTV_A", "__SYSTEM_ID", "__profil_size",
+    /* Segment markers and the dynamic-section address the loader looks up. */
+    "_DYNAMIC", "__text_seg", "__data_seg", "__thread_specific_seg",
+    NULL
+};
+
+int hld_predefine_symbols(hld_link *L)
+{
+    const char *const *n;
+
+    for (n = hld_linker_symbols; *n; n++) {
+        hld_gsym *g = sym_intern(L, *n);
+        if (!g) { lerr(L, "out of memory", NULL, NULL); return -1; }
+        if (g->kind == HLD_SYM_UNDEF) {
+            g->kind = HLD_SYM_ABS;
+            g->bind = STB_GLOBAL;
+            g->value = 0;                  /* set during layout */
+        }
+    }
+    return 0;
+}
+
 static int def_abs(hld_link *L, const char *name, uint64_t val)
 {
     hld_gsym *g = sym_intern(L, name);
@@ -320,7 +358,7 @@ static int def_abs(hld_link *L, const char *name, uint64_t val)
     if (g->kind == HLD_SYM_DEFINED) return 0;  /* an object defined it: respect that */
     g->kind = HLD_SYM_ABS;
     g->value = val;
-    g->bind = STB_GLOBAL;
+    if (!g->bind) g->bind = STB_GLOBAL;
     return 0;
 }
 
@@ -384,13 +422,27 @@ int hld_layout(hld_link *L)
         addr += o->size; off += o->size;
     }
 
-    L->gp = addr;                                 /* start of the short region */
-
-    for (o = L->osecs; o; o = o->next) {          /* short PROGBITS */
+    /*
+     * The linkage tables come first, then gp, then ordinary short data —
+     * the arrangement the platform's linker uses, which keeps the tables at
+     * negative offsets from gp and leaves the positive half for data.
+     */
+    for (o = L->osecs; o; o = o->next) {          /* .plt and .dlt first */
         if (!IS_DATA(o) || !IS_SHORT(o) || o->type == SHT_NOBITS) continue;
+        if (o != L->pltsec && o != L->dltsec) continue;
         addr = align_up(addr, o->align);
         off = align_up(off, o->align);
-        if (o->addr == 0 && L->gp == 0) L->gp = addr;
+        o->addr = addr; o->off = off;
+        addr += o->size; off += o->size;
+    }
+
+    L->gp = addr;                                 /* anchor past the tables */
+
+    for (o = L->osecs; o; o = o->next) {          /* remaining short PROGBITS */
+        if (!IS_DATA(o) || !IS_SHORT(o) || o->type == SHT_NOBITS) continue;
+        if (o == L->pltsec || o == L->dltsec) continue;
+        addr = align_up(addr, o->align);
+        off = align_up(off, o->align);
         o->addr = addr; o->off = off;
         addr += o->size; off += o->size;
     }
@@ -422,12 +474,59 @@ int hld_layout(hld_link *L)
     if (def_abs(L, "_edata", L->data_addr + L->data_filesz) < 0) return -1;
     if (def_abs(L, "_end", L->data_addr + L->data_memsz) < 0) return -1;
     if (def_abs(L, "__gp", L->gp) < 0) return -1;
+    /*
+     * Array bounds and thread-local descriptors. With no such sections
+     * present these collapse to the start of the data segment and to zero
+     * sizes, which is what an image with no initializers or TLS wants.
+     */
+    {
+        struct { const char *first, *last, *sec; } bounds[] = {
+            { "__init_start", "__init_end", ".init_array" },
+            { "__fini_start", "__fini_end", ".fini_array" },
+            { "__hp_preinit_start", "__hp_preinit_end", ".HP.preinit" }
+        };
+        size_t bi;
+        for (bi = 0; bi < sizeof bounds / sizeof bounds[0]; bi++) {
+            osec *so = osec_find(L, bounds[bi].sec);
+            uint64_t lo = so ? so->addr : L->data_addr;
+            uint64_t hi = so ? so->addr + so->size : L->data_addr;
+            if (def_abs(L, bounds[bi].first, lo) < 0) return -1;
+            if (def_abs(L, bounds[bi].last, hi) < 0) return -1;
+        }
+    }
+    if (def_abs(L, "__TLS_SIZE", 0) < 0) return -1;
+    if (def_abs(L, "__TLS_INIT_SIZE", 0) < 0) return -1;
+    if (def_abs(L, "__TLS_INIT_START", 0) < 0) return -1;
+    if (def_abs(L, "__TLS_INIT_A", 0) < 0) return -1;
+    if (def_abs(L, "__TLS_PREALLOC_DTV_A", 0) < 0) return -1;
+    if (def_abs(L, "__SYSTEM_ID", 0) < 0) return -1;
+    if (def_abs(L, "__profil_size", 0x10) < 0) return -1;
+    if (def_abs(L, "__text_seg", L->text_addr) < 0) return -1;
+    if (def_abs(L, "__data_seg", L->data_addr) < 0) return -1;
+    {
+        osec *tls = osec_find(L, ".tbss");
+        if (def_abs(L, "__thread_specific_seg",
+                    tls ? tls->addr : L->data_addr + L->data_memsz) < 0)
+            return -1;
+    }
+    if (L->dynamicsec
+        && def_abs(L, "_DYNAMIC", L->dynamicsec->addr) < 0) return -1;
 
     /* Final addresses for section-relative symbols. */
     for (h = 0; h < HLD_SYMHASH; h++)
         for (g = L->hash[h]; g; g = g->next)
             if (g->kind == HLD_SYM_DEFINED && g->in)
                 g->value = g->in->out->addr + g->in->out_off + g->in_off;
+
+    /*
+     * Number the output sections now: dynamic symbols reference them by
+     * index and are built before the section headers are written.
+     */
+    {
+        uint32_t ndx = 1;                       /* 0 is the null section */
+        osec *so;
+        for (so = L->osecs; so; so = so->next) so->shndx = ndx++;
+    }
 
     /* Entry point. */
     g = hld_sym_lookup(L, L->entry_name);
@@ -478,8 +577,9 @@ static int reloc_target(hld_link *L, hld_elf *e, hld_sym *syms, size_t nsyms,
 
     if (ELF64_ST_BIND(s->info) != STB_LOCAL && s->name[0]) {
         g = hld_sym_lookup(L, s->name);
-        if (g && (g->kind == HLD_SYM_DEFINED || g->kind == HLD_SYM_ABS)) {
-            *gp_out = g;
+        if (g && (g->kind == HLD_SYM_DEFINED || g->kind == HLD_SYM_ABS
+                  || g->kind == HLD_SYM_IMPORT)) {
+            *gp_out = g;      /* an import's value is its call stub */
             return 0;
         }
         if (g && g->bind == STB_WEAK) return 0;   /* undefined weak: 0 */

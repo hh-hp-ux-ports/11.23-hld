@@ -35,8 +35,24 @@ typedef struct osec {
     struct osec *next;
 } osec;
 
+typedef struct dsosym {
+    const char *name;
+    uint64_t value;
+    struct dsosym *next;
+} dsosym;
+
+typedef struct hld_dso {
+    hld_elf *elf;
+    const char *soname;       /* DT_SONAME, or the file's basename */
+    dsosym *hash[1021];
+    int needed;               /* something actually resolved to it */
+    uint32_t strx;            /* soname offset in .dynstr */
+    struct hld_dso *next;
+} hld_dso;
+
 typedef enum {
     HLD_SYM_UNDEF,            /* referenced, not yet defined */
+    HLD_SYM_IMPORT,           /* satisfied by a shared library */
     HLD_SYM_DEFINED,          /* defined by an input section */
     HLD_SYM_ABS,              /* absolute value (linker-defined or SHN_ABS) */
     HLD_SYM_COMMON            /* tentative definition, not yet allocated */
@@ -52,6 +68,12 @@ typedef struct hld_gsym {
     isec *in;                 /* defining input section (DEFINED) */
     uint64_t in_off;          /* offset within that input section */
     hld_elf *obj;             /* defining object, for diagnostics */
+    hld_dso *dso;             /* IMPORT: the library that defines it */
+    uint64_t hint;            /* IMPORT: its address there, a binding hint */
+    uint64_t plt_slot;        /* IMPORT: byte offset within .plt */
+    uint64_t stub_off;        /* IMPORT: byte offset within the stub section */
+    uint32_t dynidx;          /* index in .dynsym */
+    uint32_t strx;            /* name offset in .dynstr */
     struct hld_gsym *next;    /* hash chain */
 } hld_gsym;
 
@@ -99,6 +121,11 @@ typedef struct {
 
     /* dynamic output */
     int dynamic;
+    hld_dso *dsos, **dso_tail;
+    size_t ndsos, nimports;
+    osec *pltsec, *relapltsec, *stubsec;
+    char **libpaths;
+    size_t nlibpaths, libpaths_cap;
     char *dynstr;
     size_t dynstr_len, dynstr_cap;
     uint32_t ndynsym, nbucket, ndyntags, nphdr;
@@ -129,6 +156,11 @@ hld_gsym *hld_sym_lookup(hld_link *L, const char *name);
 osec *osec_get(hld_link *L, const char *name, uint32_t type, uint64_t flags);
 
 /* dynamic.c */
+int  hld_add_dso(hld_link *L, const char *path);
+int  hld_add_libpath(hld_link *L, const char *dir);
+int  hld_find_library(hld_link *L, const char *name);
+int  hld_predefine_symbols(hld_link *L);
+int  hld_bind_imports(hld_link *L);
 int  hld_alloc_dynamic(hld_link *L);
 int  hld_fill_dynamic(hld_link *L);
 

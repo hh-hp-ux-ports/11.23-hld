@@ -165,13 +165,9 @@ int hld_write_exec(hld_link *L)
         goto oom;
     off = im.len;
 
-    /*
-     * Assign output section indices before emitting symbols: a symbol's
-     * st_shndx names the section it is defined in, so the numbering has to
-     * exist first.
-     */
+    /* Section indices were assigned during layout (see hld_layout). */
     nsec = 1;                                     /* SHT_NULL */
-    for (o = L->osecs; o; o = o->next) o->shndx = nsec++;
+    for (o = L->osecs; o; o = o->next) nsec++;
 
     /* --- symbol table ---------------------------------------------------- */
     /* index 0 is the null entry; locals first (we emit only the null local) */
@@ -253,16 +249,19 @@ int hld_write_exec(hld_link *L)
 
             k = 0;
             for (o = L->osecs; o; o = o->next, k++) {
-                uint32_t link = 0;
+                uint32_t link = 0, info = 0;
                 /* .dynsym/.dynamic/.hash name the dynamic string/symbol table */
                 if (L->dynamic && L->dynstrsec
                     && (o == L->dynsymsec || o == L->dynamicsec))
                     link = L->dynstrsec->shndx;
-                if (L->dynamic && L->dynsymsec && o == L->hashsec)
+                if (L->dynamic && L->dynsymsec
+                    && (o == L->hashsec || o == L->relapltsec))
                     link = L->dynsymsec->shndx;
+                if (L->dynamic && L->pltsec && o == L->relapltsec)
+                    info = L->pltsec->shndx;
                 put_shdr(shtab + o->shndx * SHDR64_SIZE, names[k], o->type,
-                         o->flags, o->addr, o->off, o->size, link, 0, o->align,
-                         o->entsize);
+                         o->flags, o->addr, o->off, o->size, link, info,
+                         o->align, o->entsize);
             }
             put_shdr(shtab + sym_ndx * SHDR64_SIZE, n_sym, SHT_SYMTAB, 0, 0,
                      symoff, symsz, str_ndx, nlocal, 8, SYM64_SIZE);
@@ -279,30 +278,36 @@ int hld_write_exec(hld_link *L)
             free(shtab);
         }
 
-        /* --- program headers ------------------------------------------- */
-        put_phdr(ph, PT_PHDR, PF_R, phoff, HLD_TEXT_BASE + phoff,
-                 (uint64_t)nphdr * PHDR64_SIZE, (uint64_t)nphdr * PHDR64_SIZE, 8);
-        if (img_write(&im, phoff, ph, PHDR64_SIZE) < 0) goto oom;
+        /*
+         * Program headers. PT_INTERP must precede the loadable segments (the
+         * gABI requires it, and the loader rejects an image otherwise), and
+         * the platform's own linker orders them PHDR, INTERP, DYNAMIC, LOAD.
+         */
+        {
+            uint32_t pi = 0;
+#define PUT_PH(t, fl, of, va, fs, ms, al) do { \
+                put_phdr(ph, (t), (fl), (of), (va), (fs), (ms), (al)); \
+                if (img_write(&im, phoff + pi * PHDR64_SIZE, ph, \
+                              PHDR64_SIZE) < 0) goto oom; \
+                pi++; \
+            } while (0)
 
-        put_phdr(ph, PT_LOAD, PF_R | PF_X, 0, HLD_TEXT_BASE, L->text_filesz,
-                 L->text_filesz, 0x10);
-        if (img_write(&im, phoff + PHDR64_SIZE, ph, PHDR64_SIZE) < 0) goto oom;
-
-        put_phdr(ph, PT_LOAD, PF_R | PF_W, L->data_off, L->data_addr,
-                 L->data_filesz, L->data_memsz, 0x10);
-        if (img_write(&im, phoff + 2 * PHDR64_SIZE, ph, PHDR64_SIZE) < 0) goto oom;
-
-        if (L->dynamic) {
-            put_phdr(ph, PT_INTERP, PF_R, L->interpsec->off,
-                     L->interpsec->addr, L->interpsec->size,
-                     L->interpsec->size, 1);
-            if (img_write(&im, phoff + 3 * PHDR64_SIZE, ph, PHDR64_SIZE) < 0)
-                goto oom;
-            put_phdr(ph, PT_DYNAMIC, PF_R, L->dynamicsec->off,
-                     L->dynamicsec->addr, L->dynamicsec->size,
-                     L->dynamicsec->size, 8);
-            if (img_write(&im, phoff + 4 * PHDR64_SIZE, ph, PHDR64_SIZE) < 0)
-                goto oom;
+            PUT_PH(PT_PHDR, PF_R, phoff, HLD_TEXT_BASE + phoff,
+                   (uint64_t)nphdr * PHDR64_SIZE,
+                   (uint64_t)nphdr * PHDR64_SIZE, 8);
+            if (L->dynamic) {
+                PUT_PH(PT_INTERP, PF_R, L->interpsec->off, L->interpsec->addr,
+                       L->interpsec->size, L->interpsec->size, 1);
+                PUT_PH(PT_DYNAMIC, PF_R, L->dynamicsec->off,
+                       L->dynamicsec->addr, L->dynamicsec->size,
+                       L->dynamicsec->size, 8);
+            }
+            PUT_PH(PT_LOAD,
+                   PF_R | PF_X | PF_HP_CODE | PF_HP_LAZYSWAP | PF_HP_UNNAMED17,
+                   0, HLD_TEXT_BASE, L->text_filesz, L->text_filesz, 0x10);
+            PUT_PH(PT_LOAD, PF_R | PF_W | PF_HP_MODIFY, L->data_off,
+                   L->data_addr, L->data_filesz, L->data_memsz, 0x10);
+#undef PUT_PH
         }
 
         /* --- ELF header -------------------------------------------------- */

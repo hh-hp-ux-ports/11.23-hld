@@ -173,6 +173,19 @@ static inline void stle64(uint8_t *p, uint64_t v)
 #define PF_W 0x2u
 #define PF_R 0x4u
 
+/*
+ * HP-specific segment flags. The dynamic loader refuses an image ("not a
+ * valid load module") whose loadable segments do not carry them, so they
+ * are not advisory: text needs PF_HP_CODE, data needs PF_HP_MODIFY.
+ * Bit 0x20000 is unnamed in the public headers but is set by the platform's
+ * linker on text; it is reproduced here for the same reason.
+ */
+#define PF_HP_CODE      0x00040000u
+#define PF_HP_MODIFY    0x00080000u
+#define PF_HP_PAGE_SIZE 0x00100000u
+#define PF_HP_LAZYSWAP  0x00800000u
+#define PF_HP_UNNAMED17 0x00020000u
+
 /* ---- dynamic tags ------------------------------------------------------ */
 
 #define DT_NULL         0
