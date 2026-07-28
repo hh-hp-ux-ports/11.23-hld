@@ -12,46 +12,64 @@
 #define HLD_ELF64_H
 
 #include <stddef.h>
+#if defined(__hpux) && (!defined(__STDC_VERSION__) || __STDC_VERSION__ < 199901L)
+/*
+ * The vendor compiler's C89 mode leaves <stdint.h> without the fixed-width
+ * types; <sys/types.h> has them (with _HPUX_SOURCE, which port.h sets).
+ */
+#include <sys/types.h>
+#else
 #include <stdint.h>
+#endif
+
+/*
+ * `inline` is C99. The vendor compiler on the target predates it, and these
+ * accessors are small enough that plain `static` costs nothing there.
+ */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
+#define HLD_INLINE static inline
+#else
+#define HLD_INLINE static
+#endif
 
 /* ---- byte accessors (file data is MSB) --------------------------------- */
 
-static inline uint16_t be16(const uint8_t *p)
+HLD_INLINE uint16_t be16(const uint8_t *p)
 {
     return (uint16_t)((p[0] << 8) | p[1]);
 }
-static inline uint32_t be32(const uint8_t *p)
+HLD_INLINE uint32_t be32(const uint8_t *p)
 {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16)
          | ((uint32_t)p[2] << 8)  |  (uint32_t)p[3];
 }
-static inline uint64_t be64(const uint8_t *p)
+HLD_INLINE uint64_t be64(const uint8_t *p)
 {
     return ((uint64_t)be32(p) << 32) | be32(p + 4);
 }
-static inline void st16(uint8_t *p, uint16_t v)
+HLD_INLINE void st16(uint8_t *p, uint16_t v)
 {
     p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v;
 }
-static inline void st32(uint8_t *p, uint32_t v)
+HLD_INLINE void st32(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
     p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
 }
-static inline void st64(uint8_t *p, uint64_t v)
+HLD_INLINE void st64(uint8_t *p, uint64_t v)
 {
     st32(p, (uint32_t)(v >> 32)); st32(p + 4, (uint32_t)v);
 }
 
 /* Instruction bundles are little-endian regardless of ELF data encoding. */
-static inline uint64_t le64(const uint8_t *p)
+HLD_INLINE uint64_t le64(const uint8_t *p)
 {
     uint64_t v = 0;
     int i;
     for (i = 7; i >= 0; i--) v = (v << 8) | p[i];
     return v;
 }
-static inline void stle64(uint8_t *p, uint64_t v)
+HLD_INLINE void stle64(uint8_t *p, uint64_t v)
 {
     int i;
     for (i = 0; i < 8; i++) { p[i] = (uint8_t)v; v >>= 8; }

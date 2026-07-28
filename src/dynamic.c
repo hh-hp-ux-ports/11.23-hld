@@ -99,7 +99,7 @@ static const uint8_t hld_stub_template[STUB_SIZE] = {
 int hld_alloc_dynamic(hld_link *L)
 {
     osec *o;
-    uint32_t nsym, nbucket, i;
+    uint32_t nsym, nbucket;
     unsigned h;
     hld_gsym *g;
     hld_dso *d;
@@ -207,7 +207,6 @@ int hld_alloc_dynamic(hld_link *L)
     L->loadmap_off = o->size;
     o->size += LOAD_MAP_SIZE;
     L->reservesec = o;
-    (void)i;
     return 0;
 }
 

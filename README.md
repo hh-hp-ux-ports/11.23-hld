@@ -50,12 +50,27 @@ scripts/    helpers (ground-truth collection on a live 11.23 system)
 
 ## Build & test
 
-`make` builds the tools with the host compiler; `make check` runs the test suites.
-The code is C99 with no dependencies and also builds natively on HP-UX 11.23
-(`gcc -mlp64 -std=c99`). Some tests want an `ia64-hp-hpux` cross gas/readelf
-(binutils 2.46.x): point `XAS`/`CROSS_READELF` at them, or drop the definitions into
-an untracked `tests/local.conf`; without them those tests skip. Linked outputs are
-ultimately validated by running them on real Integrity hardware.
+No autotools, no configure step, no external dependencies: one hand-written
+Makefile that any POSIX make can run.
+
+```
+make CC=gcc                                  a typical Unix host
+make CC="gcc -mlp64"                         natively on HP-UX 11.23/Itanium
+make CC="aCC -Ae +DD64" CSTD= CWARN= COPT=-O natively with HP aC++
+```
+
+The last line matters: hld builds with the **vendor C compiler alone**, using
+stock HP `make`, so it can be bootstrapped on a stock 11.23 system with no GNU
+toolchain present — which is the situation this linker exists to improve. (The
+bundled `/usr/bin/cc` is not an ANSI compiler and cannot be used; aC++ in `-Ae`
+mode can.)
+
+`make check` runs the suites. The reader and relocation tests run anywhere; the
+link tests need an `ia64-hp-hpux` assembler (point `XAS` at one, or put it in an
+untracked `tests/local.conf` — see `tests/local.conf.example`); the dynamic tests
+need HP-UX/Itanium itself, since only the real dynamic loader can judge them.
+Each suite skips with a message rather than failing when its prerequisites are
+absent.
 
 ## Status
 
