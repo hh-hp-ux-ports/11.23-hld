@@ -94,12 +94,13 @@ hld_elf *hld_elf_from_memory(const char *name, uint8_t *data, size_t size,
     e->eh.osabi  = p[7];
     e->eh.abiver = p[8];
     if (e->eh.cls != ELFCLASS64) {
-        seterr(err, "%s: not ELF64 (ILP32 objects are out of scope for hld v1)",
-               path, NULL);
+        seterr(err, "%s: ELF32 input — hld links LP64 only, and nothing else "
+                    "is supported yet", path, NULL);
         goto fail_noerr;
     }
     if (e->eh.data != ELFDATA2MSB) {
-        seterr(err, "%s: not big-endian — not an HP-UX/IPF object", path, NULL);
+        seterr(err, "%s: little-endian input — hld links big-endian HP-UX/IPF "
+                    "objects only", path, NULL);
         goto fail_noerr;
     }
     e->eh.type      = be16(p + 16);

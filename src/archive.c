@@ -91,8 +91,19 @@ static int index_member(hld_link *L, hld_archive *ar, size_t mi)
         return 0;
 
     m->elf = hld_elf_from_memory(m->name, ar->data + m->off, m->len, 0, err);
-    if (!m->elf)
-        return 0;               /* unreadable member: it defines nothing */
+    if (!m->elf) {
+        /*
+         * Remember why, so an archive that turns out to hold nothing usable
+         * can say what was wrong with it rather than leaving the caller to
+         * puzzle over an unresolved symbol.
+         */
+        if (!ar->reject[0]) {
+            strncpy(ar->reject, err, sizeof ar->reject - 1);
+            ar->reject[sizeof ar->reject - 1] = 0;
+        }
+        ar->nrejected++;
+        return 0;
+    }
 
     for (j = 1; j < m->elf->eh.shnum; j++) {
         hld_sym *syms;
@@ -274,6 +285,17 @@ int hld_archive_open(hld_link *L, const char *path, hld_archive **out)
                 hld_archive_free(ar);
                 return -1;
             }
+    }
+
+    /*
+     * An archive of the wrong ABI is a mistake worth naming at once — most
+     * often a -L pointing at the ILP32 copy of a library.
+     */
+    if (ar->nmembers > 0 && ar->nrejected == ar->nmembers) {
+        snprintf(L->err, HLD_ERRSZ, "%s: no usable members (%s)",
+                 path, ar->reject);
+        hld_archive_free(ar);
+        return -1;
     }
 
     if (!L->archives) { L->archives = ar; L->ar_tail = &ar->next; }

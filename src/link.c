@@ -58,9 +58,13 @@ int hld_add_object(hld_link *L, const char *path)
 
     e = hld_elf_load(path, err);
     if (!e) { snprintf(L->err, HLD_ERRSZ, "%s", err); return -1; }
+    if (e->eh.type == ET_DYN) {
+        /* a shared library named directly, as `hld foo.so` */
+        hld_elf_free(e);
+        return hld_add_dso(L, path);
+    }
     if (e->eh.type != ET_REL) {
-        lerr(L, "%s: not a relocatable object (hld links objects only so far)",
-             path, NULL);
+        lerr(L, "%s: neither an object nor a shared library", path, NULL);
         hld_elf_free(e);
         return -1;
     }
@@ -70,8 +74,8 @@ int hld_add_object(hld_link *L, const char *path)
         return -1;
     }
     if (!(e->eh.flags & EF_IA_64_ABI64)) {
-        lerr(L, "%s: not an LP64 object (ILP32 input; hld is LP64-only)",
-             path, NULL);
+        lerr(L, "%s: ILP32 object — hld links LP64 only, and nothing else is "
+                "supported yet", path, NULL);
         hld_elf_free(e);
         return -1;
     }

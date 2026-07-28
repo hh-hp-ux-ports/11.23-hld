@@ -102,6 +102,8 @@ typedef struct hld_archive {
     armember *members;
     size_t nmembers;
     arsym *hash[HLD_ARHASH];  /* our own index: defined globals -> member */
+    size_t nrejected;         /* members that could not be read */
+    char reject[160];         /* why the first of them could not be */
     struct hld_archive *next;
 } hld_archive;
 

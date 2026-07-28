@@ -104,6 +104,80 @@ elif [ "$got" != "$expected" ]; then
     FAIL=1
 fi
 
+# --- archives of the real toolchain --------------------------------------
+# A program needing a libgcc helper, linked against the vendor archives. The
+# helper itself calls into HP's millicode, so this crosses from a GNU archive
+# into an HP one by transitive extraction.
+GCCLIB=`ls -d /opt/gcc474/lib/gcc/ia64-hp-hpux11.23/*/hpux64 2>/dev/null | head -1`
+if [ -n "$GCCLIB" ] && [ -f "$GCCLIB/libgcc.a" ] && [ -f /usr/lib/hpux64/milli.a ]; then
+    cat > $W/divti.c <<'CEOF'
+#include <stdio.h>
+static __int128 big = (__int128)1000000007 * 1000000009;
+int main(void) {
+    __int128 q = big / 1000000007;
+    printf("%llu\n", (unsigned long long)q);
+    return (int)(q - 1000000009);
+}
+CEOF
+    CHECKS=`expr $CHECKS + 1`
+    if /opt/gcc474/bin/gcc -mlp64 -O0 -c $W/divti.c -o $W/divti.o 2> $W/cc.err; then
+        CHECKS=`expr $CHECKS + 1`
+        if $HLD -dynamic -e _start -o $W/divti $W/crt_min.o $W/divti.o \
+                -L$GCCLIB -lgcc /usr/lib/hpux64/milli.a -L$LIBDIR -lc \
+                2> $W/link.err; then
+            CHECKS=`expr $CHECKS + 1`
+            got=`$W/divti`; rc=$?
+            if [ $rc -ne 0 ] || [ "$got" != "1000000009" ]; then
+                echo "FAIL: libgcc/millicode program: exit $rc, output '$got'"
+                FAIL=1
+            fi
+        else
+            echo "FAIL: linking against libgcc.a and milli.a:"; cat $W/link.err
+            FAIL=1
+        fi
+    else
+        echo "FAIL: compiling the libgcc test:"; cat $W/cc.err
+        FAIL=1
+    fi
+fi
+
+# --- objects and archives from the vendor compiler -----------------------
+# HP's compiler calls external functions through a descriptor (@pltoff) where
+# gcc emits a direct branch, and its assembler leaves a non-zero placeholder
+# in a field awaiting relocation. Both must work.
+if [ -x /opt/aCC/bin/aCC ]; then
+    cat > $W/hpmod.c <<'CEOF'
+int hp_add(int a, int b) { return a + b; }
+CEOF
+    cat > $W/hpmain.c <<'CEOF'
+#include <stdio.h>
+extern int hp_add(int, int);
+int main(void) { int r = hp_add(40, 2); printf("%d\n", r); return r - 42; }
+CEOF
+    CHECKS=`expr $CHECKS + 1`
+    ( cd $W && /opt/aCC/bin/aCC -Ae +DD64 -c hpmod.c hpmain.c ) > $W/acc.log 2>&1
+    if [ -f $W/hpmod.o ] && [ -f $W/hpmain.o ]; then
+        ( cd $W && /usr/bin/ar rc libhp.a hpmod.o ) 2>/dev/null
+        CHECKS=`expr $CHECKS + 1`
+        if $HLD -dynamic -e _start -o $W/hpprog $W/crt_min.o $W/hpmain.o \
+                -L$W -lhp -L$LIBDIR -lc 2> $W/link.err; then
+            CHECKS=`expr $CHECKS + 1`
+            got=`$W/hpprog`; rc=$?
+            if [ $rc -ne 0 ] || [ "$got" != "42" ]; then
+                echo "FAIL: vendor-compiler program: exit $rc, output '$got'"
+                FAIL=1
+            fi
+        else
+            echo "FAIL: linking vendor-compiler objects and archive:"
+            cat $W/link.err
+            FAIL=1
+        fi
+    else
+        echo "FAIL: the vendor compiler did not produce objects:"; cat $W/acc.log
+        FAIL=1
+    fi
+fi
+
 if [ $FAIL -eq 0 ]; then
     echo "OK: dynamic link checks passed ($CHECKS checks) — printf through libc.so.1 ran"
 else
