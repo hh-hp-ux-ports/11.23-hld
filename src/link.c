@@ -41,6 +41,20 @@ int hld_add_object(hld_link *L, const char *path)
 {
     hld_elf *e;
     char err[HLD_ERRSZ];
+    FILE *probe;
+
+    /* An archive named directly on the command line is searched in place. */
+    probe = fopen(path, "rb");
+    if (probe) {
+        char magic[8];
+        size_t got = fread(magic, 1, sizeof magic, probe);
+        fclose(probe);
+        if (got == sizeof magic && memcmp(magic, "!<arch>\n", 8) == 0) {
+            hld_archive *ar;
+            if (hld_archive_open(L, path, &ar) < 0) return -1;
+            return hld_archive_search(L, ar, NULL);
+        }
+    }
 
     e = hld_elf_load(path, err);
     if (!e) { snprintf(L->err, HLD_ERRSZ, "%s", err); return -1; }
@@ -289,6 +303,15 @@ int hld_input_object(hld_link *L, hld_elf *e)
 
     if (collect_sections_of(L, e) < 0) return -1;
     if (resolve_symbols_of(L, e) < 0) return -1;
+    return 0;
+}
+
+/* Seed an undefined symbol, as -u does, so it can drive archive extraction. */
+int hld_add_undefined(hld_link *L, const char *name)
+{
+    hld_gsym *g = sym_intern(L, name);
+
+    if (!g) { lerr(L, "out of memory", NULL, NULL); return -1; }
     return 0;
 }
 
@@ -678,6 +701,7 @@ static lnkent *opd_get(hld_link *L, hld_gsym *g, isec *in, uint64_t off)
     return lnk_get(L, L->opd_hash, &L->opd_tail, &L->opd, &L->nopd, 16,
                    g, in, off, 0);
 }
+
 
 /* The descriptor allocated for a target, if any. */
 static lnkent *opd_find(hld_link *L, hld_gsym *g, isec *in, uint64_t off)
@@ -1084,6 +1108,10 @@ void hld_link_free(hld_link *L)
 
     for (i = 0; i < L->nobjs; i++) hld_elf_free(L->objs[i]);
     free(L->objs);
+    {
+        hld_archive *ar, *arn;
+        for (ar = L->archives; ar; ar = arn) { arn = ar->next; hld_archive_free(ar); }
+    }
     for (o = L->osecs; o; o = on) {
         isec *in, *inn;
         on = o->next;

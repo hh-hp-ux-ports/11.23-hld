@@ -411,13 +411,19 @@ int hld_add_libpath(hld_link *L, const char *dir)
     return 0;
 }
 
-/* Resolve -lNAME against the -L list, preferring the shared form. */
-int hld_find_library(hld_link *L, const char *name)
+/*
+ * Resolve -lNAME against the -L list. Each directory is tried in turn for the
+ * shared forms and then the archive, so a directory holding both yields the
+ * shared one, as every Unix linker does. An archive is searched immediately:
+ * it must see exactly the symbols undefined at its position.
+ */
+int hld_find_library(hld_link *L, const char *name, hld_archive **ar_out)
 {
     char path[1024];
     size_t i;
     FILE *f;
 
+    if (ar_out) *ar_out = NULL;
     for (i = 0; i < L->nlibpaths; i++) {
         snprintf(path, sizeof path, "%s/lib%s.so", L->libpaths[i], name);
         f = fopen(path, "rb");
@@ -426,6 +432,16 @@ int hld_find_library(hld_link *L, const char *name)
         snprintf(path, sizeof path, "%s/lib%s.so.1", L->libpaths[i], name);
         f = fopen(path, "rb");
         if (f) { fclose(f); return hld_add_dso(L, path); }
+
+        snprintf(path, sizeof path, "%s/lib%s.a", L->libpaths[i], name);
+        f = fopen(path, "rb");
+        if (f) {
+            hld_archive *ar;
+            fclose(f);
+            if (hld_archive_open(L, path, &ar) < 0) return -1;
+            if (ar_out) *ar_out = ar;
+            return hld_archive_search(L, ar, NULL);
+        }
     }
     snprintf(L->err, HLD_ERRSZ, "cannot find library -l%s", name);
     return -1;

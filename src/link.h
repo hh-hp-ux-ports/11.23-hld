@@ -79,6 +79,31 @@ typedef struct hld_gsym {
 
 #define HLD_SYMHASH 1021
 #define HLD_LNKHASH 1021
+#define HLD_ARHASH  1021
+
+/* One member of an `ar` archive, and the archive itself. */
+typedef struct arsym {
+    const char *name;         /* into the member's own string table */
+    size_t member;
+    struct arsym *next;
+} arsym;
+
+typedef struct armember {
+    const char *name;
+    size_t off, len;          /* within the archive's buffer */
+    int extracted;
+    hld_elf *elf;             /* parsed once, borrowing that buffer */
+} armember;
+
+typedef struct hld_archive {
+    char *path;
+    uint8_t *data;
+    size_t size;
+    armember *members;
+    size_t nmembers;
+    arsym *hash[HLD_ARHASH];  /* our own index: defined globals -> member */
+    struct hld_archive *next;
+} hld_archive;
 
 /*
  * A linkage-table entry. Both the DLT (the GOT: 8-byte slots holding an
@@ -119,6 +144,10 @@ typedef struct {
     uint64_t entry;
     uint64_t gp;
 
+    /* archives, in command-line order */
+    hld_archive *archives, **ar_tail;
+    size_t narchives;
+
     /* dynamic output */
     int dynamic;
     hld_dso *dsos, **dso_tail;
@@ -145,6 +174,7 @@ typedef struct {
 /* link.c */
 int  hld_add_object(hld_link *L, const char *path);
 int  hld_input_object(hld_link *L, hld_elf *e);
+int  hld_add_undefined(hld_link *L, const char *name);
 int  hld_allocate_commons(hld_link *L);
 int  hld_alloc_linkage(hld_link *L);
 int  hld_layout(hld_link *L);
@@ -155,10 +185,15 @@ void hld_link_free(hld_link *L);
 hld_gsym *hld_sym_lookup(hld_link *L, const char *name);
 osec *osec_get(hld_link *L, const char *name, uint32_t type, uint64_t flags);
 
+/* archive.c */
+int  hld_archive_open(hld_link *L, const char *path, hld_archive **out);
+int  hld_archive_search(hld_link *L, hld_archive *ar, int *extracted_any);
+void hld_archive_free(hld_archive *ar);
+
 /* dynamic.c */
 int  hld_add_dso(hld_link *L, const char *path);
 int  hld_add_libpath(hld_link *L, const char *dir);
-int  hld_find_library(hld_link *L, const char *name);
+int  hld_find_library(hld_link *L, const char *name, hld_archive **ar_out);
 int  hld_predefine_symbols(hld_link *L);
 int  hld_bind_imports(hld_link *L);
 int  hld_alloc_dynamic(hld_link *L);

@@ -24,10 +24,14 @@ static void usage(void)
         "  -z           trap NULL dereferences (sets the TRAPNIL flag)\n"
         "  -m           print a link map to stdout\n"
         "  -dynamic     produce a dynamic executable\n"
-        "  -u SYM       treat SYM as undefined (archive extraction; accepted)\n"
+        "  -u SYM       treat SYM as undefined, so archives are searched for it\n"
+        "  -L DIR       add a library search directory\n"
+        "  -l NAME      link libNAME.so, libNAME.so.1 or libNAME.a\n"
+        "  --start-group ... --end-group   re-search these archives until\n"
+        "               nothing further is pulled in\n"
         "  -V           print version\n"
-        "hld links static LP64 HP-UX/IA-64 executables. Shared libraries,\n"
-        "archives and dynamic executables are not implemented yet.\n");
+        "Archives are searched at their position on the command line.\n"
+        "hld does not produce shared libraries yet.\n");
 }
 
 int main(int argc, char **argv)
@@ -35,6 +39,10 @@ int main(int argc, char **argv)
     hld_link L;
     int i;
     int ninputs = 0;
+    /* archives named inside --start-group ... --end-group */
+    hld_archive **group = NULL;
+    size_t ngroup = 0, group_cap = 0;
+    int in_group = 0;
 
     memset(&L, 0, sizeof L);
     L.osec_tail = &L.osecs;
@@ -51,7 +59,11 @@ int main(int argc, char **argv)
         }
         if (strcmp(a, "-o") == 0 && i + 1 < argc) { L.out_path = argv[++i]; continue; }
         if (strcmp(a, "-e") == 0 && i + 1 < argc) { L.entry_name = argv[++i]; continue; }
-        if (strcmp(a, "-u") == 0 && i + 1 < argc) { ++i; continue; }
+        if (strcmp(a, "-u") == 0 && i + 1 < argc) {
+            /* seed an undefined symbol so archives are searched for it */
+            if (hld_add_undefined(&L, argv[++i]) < 0) goto fail;
+            continue;
+        }
         if (strcmp(a, "-z") == 0) { L.trapnil = 1; continue; }
         if (strcmp(a, "-m") == 0) { L.map = 1; continue; }
         if (strcmp(a, "-dynamic") == 0) { L.dynamic = 1; continue; }
@@ -67,10 +79,46 @@ int main(int argc, char **argv)
             fprintf(stderr, "hld: -b (shared library output) is not implemented yet\n");
             return 1;
         }
+        if (strcmp(a, "--start-group") == 0 || strcmp(a, "-(") == 0) {
+            in_group = 1;
+            ngroup = 0;
+            continue;
+        }
+        if (strcmp(a, "--end-group") == 0 || strcmp(a, "-)") == 0) {
+            /*
+             * Re-search the archives in the group until a whole pass pulls
+             * nothing: that is what lets two archives satisfy each other
+             * regardless of the order they were named in.
+             */
+            int changed;
+            size_t k;
+            in_group = 0;
+            do {
+                changed = 0;
+                for (k = 0; k < ngroup; k++) {
+                    int any = 0;
+                    if (hld_archive_search(&L, group[k], &any) < 0) goto fail;
+                    if (any) changed = 1;
+                }
+            } while (changed);
+            ngroup = 0;
+            continue;
+        }
         if (a[0] == '-' && a[1] == 'l') {
             const char *nm = a[2] ? a + 2 : (i + 1 < argc ? argv[++i] : NULL);
+            hld_archive *ar = NULL;
             if (!nm) { fprintf(stderr, "hld: -l needs a name\n"); return 1; }
-            if (hld_find_library(&L, nm) < 0) goto fail;
+            if (hld_find_library(&L, nm, &ar) < 0) goto fail;
+            if (in_group && ar) {
+                if (ngroup == group_cap) {
+                    size_t nc = group_cap ? group_cap * 2 : 8;
+                    hld_archive **ng = realloc(group, nc * sizeof *ng);
+                    if (!ng) { fprintf(stderr, "hld: out of memory\n"); return 1; }
+                    group = ng;
+                    group_cap = nc;
+                }
+                group[ngroup++] = ar;
+            }
             ninputs++;
             continue;
         }
@@ -100,10 +148,12 @@ int main(int argc, char **argv)
     if (hld_write_exec(&L) < 0) goto fail;
     if (L.map) hld_print_map(&L);
 
+    free(group);
     hld_link_free(&L);
     return 0;
 
 fail:
+    free(group);
     fprintf(stderr, "hld: %s\n", L.err[0] ? L.err : "link failed");
     hld_link_free(&L);
     return 1;

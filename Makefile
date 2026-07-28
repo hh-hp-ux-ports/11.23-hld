@@ -17,7 +17,7 @@ CFLAGS  = $(CSTD) $(CWARN) $(COPT)
 BUILD   = build
 
 READER  = src/elfread.c
-LINKSRC = src/hld.c src/link.c src/write.c src/dynamic.c src/ia64_patch.c $(READER)
+LINKSRC = src/hld.c src/link.c src/write.c src/dynamic.c src/archive.c src/ia64_patch.c $(READER)
 HDRS    = src/elf64.h src/port.h src/ia64_patch.h src/link.h
 
 all: $(BUILD)/hld $(BUILD)/hld-readelf $(BUILD)/patch_harness
@@ -41,6 +41,7 @@ check: all
 	sh tests/check_readelf.sh
 	sh tests/check_patch.sh
 	sh tests/check_link.sh
+	sh tests/check_archive.sh
 	sh tests/check_dynamic.sh
 
 # An SD depot for swinstall. Must be built on HP-UX (swpackage lives there);
