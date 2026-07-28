@@ -178,6 +178,68 @@ CEOF
     fi
 fi
 
+# --- C++: exceptions, iostreams, and another module's data ----------------
+# A C++ program reads the C library's own data — the FILE table behind
+# stdout, the ctype masks, errno — both through linkage-table slots and
+# through data words that hold such an address. hld cannot resolve either at
+# link time, so both need a dynamic relocation; without them the program
+# dies on a null or read-only pointer inside the runtime's start-up, long
+# before main. Exercised here end to end: construct, throw, unwind, catch.
+CXX=
+for cand in /opt/gcc474/bin/g++ g++; do
+    if command -v "$cand" > /dev/null 2>&1; then CXX=$cand; break; fi
+done
+if [ -n "$CXX" ]; then
+    mkdir -p $W/bdir
+    rm -f $W/bdir/ld
+    ln -s "`pwd`/$HLD" $W/bdir/ld
+    cat > $W/ehtest.cpp <<'CEOF'
+#include <iostream>
+#include <stdexcept>
+struct Trace {
+    const char *n;
+    Trace(const char *s) : n(s) {}
+    ~Trace() { std::cout << "dtor " << n << std::endl; }
+};
+static void deep() { Trace t("deep"); throw std::runtime_error("boom"); }
+int main() {
+    std::cout << "start" << std::endl;
+    try { deep(); }
+    catch (const std::exception &e) { std::cout << "caught " << e.what() << std::endl; }
+    return 0;
+}
+CEOF
+    cat > $W/ehtest.expected <<'CEOF'
+start
+dtor deep
+caught boom
+CEOF
+    CHECKS=`expr $CHECKS + 1`
+    if $CXX -mlp64 -c $W/ehtest.cpp -o $W/ehtest.o 2> $W/cxx.err; then
+        CHECKS=`expr $CHECKS + 1`
+        if $CXX -mlp64 -B$W/bdir/ -o $W/ehtest $W/ehtest.o 2> $W/link.err; then
+            CHECKS=`expr $CHECKS + 1`
+            $W/ehtest > $W/ehtest.out 2> $W/run.err
+            rc=$?
+            if [ $rc -ne 0 ]; then
+                echo "FAIL: C++ exception program exited $rc"
+                [ -s $W/run.err ] && cat $W/run.err
+                FAIL=1
+            elif cmp -s $W/ehtest.out $W/ehtest.expected; then :; else
+                echo "FAIL: C++ exception program printed the wrong thing:"
+                cat $W/ehtest.out
+                FAIL=1
+            fi
+        else
+            echo "FAIL: linking a C++ program:"; cat $W/link.err
+            FAIL=1
+        fi
+    else
+        echo "FAIL: compiling the C++ test:"; cat $W/cxx.err
+        FAIL=1
+    fi
+fi
+
 if [ $FAIL -eq 0 ]; then
     echo "OK: dynamic link checks passed ($CHECKS checks) — printf through libc.so.1 ran"
 else
