@@ -83,7 +83,7 @@ static osec *osec_find(hld_link *L, const char *name)
     return NULL;
 }
 
-static osec *osec_get(hld_link *L, const char *name, uint32_t type, uint64_t flags)
+osec *osec_get(hld_link *L, const char *name, uint32_t type, uint64_t flags)
 {
     osec *o = osec_find(L, name);
 
@@ -336,7 +336,10 @@ int hld_layout(hld_link *L)
     osec *o;
     hld_gsym *g;
     unsigned h;
-    int nphdr = 3;   /* PHDR + LOAD text + LOAD data */
+    /* PHDR + LOAD text + LOAD data, plus INTERP and DYNAMIC when dynamic */
+    uint32_t nphdr = L->dynamic ? 5 : 3;
+
+    L->nphdr = nphdr;
 
     /* text segment */
     off = (uint64_t)EHDR64_SIZE + (uint64_t)nphdr * PHDR64_SIZE;

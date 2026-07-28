@@ -23,6 +23,7 @@ static void usage(void)
         "  -e SYM       entry point (default main)\n"
         "  -z           trap NULL dereferences (sets the TRAPNIL flag)\n"
         "  -m           print a link map to stdout\n"
+        "  -dynamic     produce a dynamic executable\n"
         "  -u SYM       treat SYM as undefined (archive extraction; accepted)\n"
         "  -V           print version\n"
         "hld links static LP64 HP-UX/IA-64 executables. Shared libraries,\n"
@@ -53,6 +54,7 @@ int main(int argc, char **argv)
         if (strcmp(a, "-u") == 0 && i + 1 < argc) { ++i; continue; }
         if (strcmp(a, "-z") == 0) { L.trapnil = 1; continue; }
         if (strcmp(a, "-m") == 0) { L.map = 1; continue; }
+        if (strcmp(a, "-dynamic") == 0) { L.dynamic = 1; continue; }
         if (strcmp(a, "-v") == 0) { L.verbose = 1; continue; }
         if (strcmp(a, "-V") == 0) {
             printf("hld — HP-UX 11.23 IA-64 LP64 linker (foundation)\n");
@@ -83,8 +85,10 @@ int main(int argc, char **argv)
     if (hld_collect_sections(&L) < 0) goto fail;
     if (hld_resolve_symbols(&L) < 0) goto fail;
     if (hld_alloc_linkage(&L) < 0) goto fail;
+    if (hld_alloc_dynamic(&L) < 0) goto fail;
     if (hld_layout(&L) < 0) goto fail;
     if (hld_build_contents(&L) < 0) goto fail;
+    if (hld_fill_dynamic(&L) < 0) goto fail;
     if (hld_relocate(&L) < 0) goto fail;
     if (hld_write_exec(&L) < 0) goto fail;
     if (L.map) hld_print_map(&L);

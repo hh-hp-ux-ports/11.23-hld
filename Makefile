@@ -8,7 +8,7 @@ BUILD    = build
 
 TOOLS    = $(BUILD)/hld $(BUILD)/hld-readelf $(BUILD)/patch_harness
 READER_SRC = src/elfread.c
-LINK_SRC = src/hld.c src/link.c src/write.c src/ia64_patch.c $(READER_SRC)
+LINK_SRC = src/hld.c src/link.c src/write.c src/dynamic.c src/ia64_patch.c $(READER_SRC)
 HDRS     = src/elf64.h src/port.h src/ia64_patch.h src/link.h
 
 all: $(TOOLS)

@@ -97,6 +97,14 @@ typedef struct {
     uint64_t entry;
     uint64_t gp;
 
+    /* dynamic output */
+    int dynamic;
+    char *dynstr;
+    size_t dynstr_len, dynstr_cap;
+    uint32_t ndynsym, nbucket, ndyntags, nphdr;
+    uint64_t reserve_off, loadmap_off;
+    osec *interpsec, *dynsymsec, *dynstrsec, *hashsec, *dynamicsec, *reservesec;
+
     /* options */
     const char *out_path;
     const char *entry_name;
@@ -118,6 +126,11 @@ int  hld_relocate(hld_link *L);
 void hld_print_map(hld_link *L);
 void hld_link_free(hld_link *L);
 hld_gsym *hld_sym_lookup(hld_link *L, const char *name);
+osec *osec_get(hld_link *L, const char *name, uint32_t type, uint64_t flags);
+
+/* dynamic.c */
+int  hld_alloc_dynamic(hld_link *L);
+int  hld_fill_dynamic(hld_link *L);
 
 /* write.c */
 int  hld_write_exec(hld_link *L);

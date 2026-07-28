@@ -127,6 +127,51 @@ The second rule is easy to violate accidentally: `p_filesz == 0` does *not*
 excuse an out-of-range `p_offset`. hld therefore always extends the output
 file to at least `data_off + data_filesz`.
 
+## What the dynamic loader requires
+
+Established the same way — removing one `.dynamic` entry at a time from a
+working dynamic executable and running the result. Removal of a required tag
+segfaults inside the loader before `main`.
+
+| tag | image with no imports | image importing from a library |
+|---|---|---|
+| `DT_HASH` | **required** | **required** |
+| `DT_HP_LOAD_MAP` | **required** | **required** |
+| `DT_STRTAB`, `DT_SYMTAB`, `DT_PLTGOT`, `DT_RELA`, `DT_JMPREL`, `DT_IA_64_PLT_RESERVE`, `DT_HP_DLD_FLAGS` | optional | **required** |
+| `DT_STRSZ`, `DT_SYMENT`, `DT_RELASZ`, `DT_RELAENT`, `DT_PLTREL`, `DT_PLTRELSZ` | optional | optional |
+| `DT_FLAGS`, `DT_RUNPATH`, `DT_HP_TIME_STAMP`, `DT_HP_CHECKSUM`, `DT_HP_GST_SIZE`, `DT_HP_GST_VERSION`, `DT_HP_GST_HASHVAL` | optional | optional |
+
+The size tags being optional while the tables themselves are mandatory
+suggests the loader walks the linkage tables rather than the relocation
+arrays for lazy binding. hld emits the full set regardless.
+
+`DT_HP_LOAD_MAP` and `DT_IA_64_PLT_RESERVE` both point at writable scratch
+the loader owns — a single word and a 24-byte (three-slot) region
+respectively, in short bss.
+
+### Calling an imported function
+
+The compiler emits a plain `R_IA64_PCREL21B` direct call to the external
+symbol; the linker redirects it to a generated stub and puts a 16-byte
+`{entry point, gp}` import descriptor in `.plt`, with an `R_IA64_IPLTMSB`
+relocation in `.rela.plt` naming the symbol. The stub is three bundles:
+
+```
+    addl    r15 = <plt slot - gp>, r1   // address the descriptor gp-relatively
+    ;;
+    ld8.acq r16 = [r15], 8              // entry point, then step to the gp word
+    mov     r14 = r1                    // current gp (used by the lazy resolver)
+    ;;
+    ld8     r1 = [r15]                  // the callee's gp
+    mov     b6 = r16
+    br.few  b6
+```
+
+Before binding, the descriptor's entry word points at a loader trampoline
+that records which slot was called; after binding it holds the real address.
+Undefined dynamic symbols also carry the address the symbol resolved to at
+link time in `st_value`, as a hint.
+
 **A static executable is entered with `gp` == 0** — the kernel does not set it
 up (probed by exiting with the top nibble of `r1`). Only the dynamic loader
 sets `gp`, from `DT_PLTGOT`, before transferring control. Statically linked

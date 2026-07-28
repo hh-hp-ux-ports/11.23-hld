@@ -1,9 +1,8 @@
 /*
  * write.c — emit an HP-UX/IPF LP64 ET_EXEC image.
  *
- * Static executables only so far: two LOAD segments plus PT_PHDR, no
- * PT_INTERP and no .dynamic (nothing here needs the dynamic loader). The
- * file layout mirrors what HP ld produces — the text segment is mapped from
+ * A static image is two LOAD segments plus PT_PHDR; a dynamic one adds
+ * PT_INTERP and PT_DYNAMIC. The file layout mirrors what HP ld produces — the text segment is mapped from
  * file offset 0 so the ELF header and program headers live in its first
  * page, and the data segment's file offset stays congruent to its vaddr
  * modulo HLD_SEG_ALIGN.
@@ -134,7 +133,7 @@ int hld_write_exec(hld_link *L)
     osec *o;
     uint8_t eh[EHDR64_SIZE], ph[PHDR64_SIZE];
     uint64_t phoff = EHDR64_SIZE, shoff;
-    uint32_t nphdr = 3, nsec;
+    uint32_t nphdr = L->nphdr ? L->nphdr : 3, nsec;
     uint64_t off;
     uint8_t *symbuf = NULL;
     size_t nsym = 0, symcap = 0, symsz;
@@ -253,10 +252,18 @@ int hld_write_exec(hld_link *L)
             if (!shtab) { free(names); goto oom; }
 
             k = 0;
-            for (o = L->osecs; o; o = o->next, k++)
+            for (o = L->osecs; o; o = o->next, k++) {
+                uint32_t link = 0;
+                /* .dynsym/.dynamic/.hash name the dynamic string/symbol table */
+                if (L->dynamic && L->dynstrsec
+                    && (o == L->dynsymsec || o == L->dynamicsec))
+                    link = L->dynstrsec->shndx;
+                if (L->dynamic && L->dynsymsec && o == L->hashsec)
+                    link = L->dynsymsec->shndx;
                 put_shdr(shtab + o->shndx * SHDR64_SIZE, names[k], o->type,
-                         o->flags, o->addr, o->off, o->size, 0, 0, o->align,
+                         o->flags, o->addr, o->off, o->size, link, 0, o->align,
                          o->entsize);
+            }
             put_shdr(shtab + sym_ndx * SHDR64_SIZE, n_sym, SHT_SYMTAB, 0, 0,
                      symoff, symsz, str_ndx, nlocal, 8, SYM64_SIZE);
             put_shdr(shtab + str_ndx * SHDR64_SIZE, n_str, SHT_STRTAB, 0, 0,
@@ -284,6 +291,19 @@ int hld_write_exec(hld_link *L)
         put_phdr(ph, PT_LOAD, PF_R | PF_W, L->data_off, L->data_addr,
                  L->data_filesz, L->data_memsz, 0x10);
         if (img_write(&im, phoff + 2 * PHDR64_SIZE, ph, PHDR64_SIZE) < 0) goto oom;
+
+        if (L->dynamic) {
+            put_phdr(ph, PT_INTERP, PF_R, L->interpsec->off,
+                     L->interpsec->addr, L->interpsec->size,
+                     L->interpsec->size, 1);
+            if (img_write(&im, phoff + 3 * PHDR64_SIZE, ph, PHDR64_SIZE) < 0)
+                goto oom;
+            put_phdr(ph, PT_DYNAMIC, PF_R, L->dynamicsec->off,
+                     L->dynamicsec->addr, L->dynamicsec->size,
+                     L->dynamicsec->size, 8);
+            if (img_write(&im, phoff + 4 * PHDR64_SIZE, ph, PHDR64_SIZE) < 0)
+                goto oom;
+        }
 
         /* --- ELF header -------------------------------------------------- */
         memset(eh, 0, sizeof eh);
