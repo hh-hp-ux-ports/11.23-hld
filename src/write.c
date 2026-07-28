@@ -166,6 +166,14 @@ int hld_write_exec(hld_link *L)
         goto oom;
     off = im.len;
 
+    /*
+     * Assign output section indices before emitting symbols: a symbol's
+     * st_shndx names the section it is defined in, so the numbering has to
+     * exist first.
+     */
+    nsec = 1;                                     /* SHT_NULL */
+    for (o = L->osecs; o; o = o->next) o->shndx = nsec++;
+
     /* --- symbol table ---------------------------------------------------- */
     /* index 0 is the null entry; locals first (we emit only the null local) */
     symcap = 64;
@@ -200,10 +208,7 @@ int hld_write_exec(hld_link *L)
     }
     symsz = nsym * SYM64_SIZE;
 
-    /* --- section header table indices ------------------------------------ */
-    nsec = 1;                                     /* SHT_NULL */
-    for (o = L->osecs; o; o = o->next) o->shndx = nsec++;
-    /* .symtab, .strtab, .shstrtab follow */
+    /* --- section header table: .symtab, .strtab, .shstrtab follow ------- */
     {
         uint32_t sym_ndx = nsec++, str_ndx = nsec++, shstr_ndx = nsec++;
         uint64_t symoff, stroff, shstroff;

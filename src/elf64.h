@@ -128,6 +128,12 @@ static inline void stle64(uint8_t *p, uint64_t v)
 /* special section indexes */
 #define SHN_UNDEF  0
 #define SHN_LORESERVE 0xff00u
+/*
+ * IA-64 "ANSI C common": like SHN_COMMON, but such a symbol takes precedence
+ * over a weak definition, and it belongs in the short-addressable bss. gcc
+ * emits it for ordinary tentative definitions (`int x;` at file scope).
+ */
+#define SHN_IA_64_ANSI_COMMON SHN_LORESERVE
 #define SHN_ABS    0xfff1u
 #define SHN_COMMON 0xfff2u
 #define SHN_XINDEX 0xffffu

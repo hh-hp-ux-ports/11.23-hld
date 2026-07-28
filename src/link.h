@@ -48,6 +48,7 @@ typedef struct hld_gsym {
     uint64_t value;           /* final address (ABS: the value itself) */
     uint64_t size;
     uint8_t type, bind, other;
+    int short_common;         /* COMMON belongs in the short bss (.sbss) */
     isec *in;                 /* defining input section (DEFINED) */
     uint64_t in_off;          /* offset within that input section */
     hld_elf *obj;             /* defining object, for diagnostics */
@@ -55,6 +56,23 @@ typedef struct hld_gsym {
 } hld_gsym;
 
 #define HLD_SYMHASH 1021
+#define HLD_LNKHASH 1021
+
+/*
+ * A linkage-table entry. Both the DLT (the GOT: 8-byte slots holding an
+ * address, reached gp-relatively) and the descriptor table (.opd: 16-byte
+ * {code address, gp} pairs) are keyed the same way — by the target the
+ * relocation names, plus an addend.
+ */
+typedef struct lnkent {
+    struct hld_gsym *g;       /* global target, or NULL for a local one */
+    struct isec *in;          /* local target's input section */
+    uint64_t off;             /* addend (global) or offset within `in` */
+    int is_fptr;              /* DLT only: slot holds a descriptor's address */
+    uint64_t slot;            /* byte offset within the DLT / .opd */
+    struct lnkent *hnext;     /* hash chain */
+    struct lnkent *next;      /* allocation order, for filling contents */
+} lnkent;
 
 typedef struct {
     /* inputs */
@@ -66,6 +84,12 @@ typedef struct {
     size_t nosecs;
 
     hld_gsym *hash[HLD_SYMHASH];
+
+    /* linkage tables */
+    lnkent *dlt_hash[HLD_LNKHASH], *dlt, **dlt_tail;
+    lnkent *opd_hash[HLD_LNKHASH], *opd, **opd_tail;
+    uint64_t ndlt, nopd;
+    osec *dltsec, *opdsec;
 
     /* layout results */
     uint64_t text_addr, text_end, text_filesz;
@@ -87,6 +111,7 @@ typedef struct {
 int  hld_add_object(hld_link *L, const char *path);
 int  hld_collect_sections(hld_link *L);
 int  hld_resolve_symbols(hld_link *L);
+int  hld_alloc_linkage(hld_link *L);
 int  hld_layout(hld_link *L);
 int  hld_build_contents(hld_link *L);
 int  hld_relocate(hld_link *L);

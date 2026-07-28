@@ -82,6 +82,7 @@ int main(int argc, char **argv)
 
     if (hld_collect_sections(&L) < 0) goto fail;
     if (hld_resolve_symbols(&L) < 0) goto fail;
+    if (hld_alloc_linkage(&L) < 0) goto fail;
     if (hld_layout(&L) < 0) goto fail;
     if (hld_build_contents(&L) < 0) goto fail;
     if (hld_relocate(&L) < 0) goto fail;

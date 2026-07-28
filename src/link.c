@@ -2,10 +2,9 @@
  * link.c — section collection, symbol resolution, address assignment and
  * relocation application.
  *
- * Scope note: this is the static-executable path. DLT (GOT) and function
- * descriptor (.opd) construction, archives and dynamic output are not here
- * yet, so relocations that require them are rejected loudly rather than
- * mis-applied.
+ * Scope note: the static-executable path. Archives and dynamic output are
+ * not here yet, so relocations that need them are rejected loudly rather
+ * than mis-applied.
  */
 #include "port.h"
 
@@ -237,10 +236,13 @@ int hld_resolve_symbols(hld_link *L)
                         g->bind = STB_WEAK;
                     continue;
                 }
-                if (s->shndx == SHN_COMMON) {
+                if (s->shndx == SHN_COMMON
+                    || s->shndx == SHN_IA_64_ANSI_COMMON) {
                     if (g->kind == HLD_SYM_UNDEF
                         || (g->kind == HLD_SYM_COMMON && s->size > g->size)) {
                         g->kind = HLD_SYM_COMMON;
+                        g->short_common =
+                            (s->shndx == SHN_IA_64_ANSI_COMMON);
                         g->size = s->size;
                         g->value = s->value ? s->value : 8; /* alignment */
                         g->type = type;
@@ -285,7 +287,10 @@ int hld_resolve_symbols(hld_link *L)
             isec *in;
 
             if (g->kind != HLD_SYM_COMMON) continue;
-            bss = osec_get(L, ".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE);
+            bss = g->short_common
+                ? osec_get(L, ".sbss", SHT_NOBITS,
+                           SHF_ALLOC | SHF_WRITE | SHF_IA_64_SHORT)
+                : osec_get(L, ".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE);
             if (!bss) { lerr(L, "out of memory", NULL, NULL); return -1; }
             if (g->value > bss->align) bss->align = g->value;
             in = calloc(1, sizeof *in);
@@ -351,40 +356,59 @@ int hld_layout(hld_link *L)
     L->text_end = addr;
     L->text_filesz = off;
 
-    /* data segment: file offset congruent to vaddr mod HLD_SEG_ALIGN */
+    /*
+     * Data segment: file offset congruent to vaddr mod HLD_SEG_ALIGN.
+     *
+     * Short-addressable sections (.plt/.dlt/.sdata/.sbss) are grouped in the
+     * middle so a single gp value reaches all of them through the +-2MB addl
+     * window, which is the layout HP's linker uses as well:
+     *     [ long PROGBITS ] [ short PROGBITS ] [ short NOBITS ] [ long NOBITS ]
+     *                       ^ gp anchors here
+     */
     off = align_up(off, HLD_SEG_ALIGN);
     addr = HLD_DATA_BASE;
     L->data_addr = addr;
     L->data_off = off;
 
-    for (o = L->osecs; o; o = o->next) {
-        if (sec_is_text(o->flags) || !(o->flags & SHF_ALLOC)) continue;
-        if (o->type == SHT_NOBITS) continue;    /* placed after PROGBITS */
+#define IS_DATA(o) (!sec_is_text((o)->flags) && ((o)->flags & SHF_ALLOC))
+#define IS_SHORT(o) (((o)->flags & SHF_IA_64_SHORT) != 0)
+
+    for (o = L->osecs; o; o = o->next) {          /* long PROGBITS */
+        if (!IS_DATA(o) || IS_SHORT(o) || o->type == SHT_NOBITS) continue;
         addr = align_up(addr, o->align);
         off = align_up(off, o->align);
-        o->addr = addr;
-        o->off = off;
-        addr += o->size;
-        off += o->size;
+        o->addr = addr; o->off = off;
+        addr += o->size; off += o->size;
+    }
+
+    L->gp = addr;                                 /* start of the short region */
+
+    for (o = L->osecs; o; o = o->next) {          /* short PROGBITS */
+        if (!IS_DATA(o) || !IS_SHORT(o) || o->type == SHT_NOBITS) continue;
+        addr = align_up(addr, o->align);
+        off = align_up(off, o->align);
+        if (o->addr == 0 && L->gp == 0) L->gp = addr;
+        o->addr = addr; o->off = off;
+        addr += o->size; off += o->size;
     }
     L->data_filesz = off - L->data_off;
 
-    for (o = L->osecs; o; o = o->next) {
-        if (sec_is_text(o->flags) || !(o->flags & SHF_ALLOC)) continue;
-        if (o->type != SHT_NOBITS) continue;
+    for (o = L->osecs; o; o = o->next) {          /* short NOBITS */
+        if (!IS_DATA(o) || !IS_SHORT(o) || o->type != SHT_NOBITS) continue;
         addr = align_up(addr, o->align);
-        o->addr = addr;
-        o->off = off;                            /* no file image */
+        o->addr = addr; o->off = off;
+        addr += o->size;
+    }
+    for (o = L->osecs; o; o = o->next) {          /* long NOBITS */
+        if (!IS_DATA(o) || IS_SHORT(o) || o->type != SHT_NOBITS) continue;
+        addr = align_up(addr, o->align);
+        o->addr = addr; o->off = off;
         addr += o->size;
     }
     L->data_memsz = addr - L->data_addr;
 
-    /*
-     * __gp anchors short-data addressing. Place it so the +-2MB addl window
-     * covers the short sections; with none present, the data segment start is
-     * the natural choice.
-     */
-    L->gp = L->data_addr + 0x10;
+#undef IS_DATA
+#undef IS_SHORT
 
     /* Linker-defined symbols (docs/format-notes.md). */
     if (def_abs(L, "__text_start", L->text_addr) < 0) return -1;
@@ -422,17 +446,26 @@ int hld_layout(hld_link *L)
 
 /* ---- relocation -------------------------------------------------------- */
 
-/* Address of a symbol referenced by relocation `r' in object `e'. */
-static int reloc_symval(hld_link *L, hld_elf *e, const hld_shdr *symsh,
-                        hld_sym *syms, size_t nsyms, const hld_rela *r,
-                        uint64_t *out, const char **name)
+/*
+ * Identify what a relocation refers to, without needing final addresses:
+ * either a global symbol (*gp_out) or a local input section (*in_out) plus
+ * an offset. This runs both before layout (to allocate linkage-table slots)
+ * and after it (to compute values), so it must not depend on addresses.
+ */
+static int reloc_target(hld_link *L, hld_elf *e, hld_sym *syms, size_t nsyms,
+                        const hld_rela *r, hld_gsym **gp_out, isec **in_out,
+                        uint64_t *off_out, const char **name)
 {
     hld_sym *s;
     isec *in;
     hld_gsym *g;
 
-    (void)symsh;
-    if (r->sym == 0) { *out = 0; *name = "<none>"; return 0; }
+    *gp_out = NULL;
+    *in_out = NULL;
+    *off_out = (uint64_t)r->addend;
+    *name = "";
+
+    if (r->sym == 0) { *name = "<none>"; return 0; }
     if (r->sym >= nsyms) {
         lerr(L, "%s: relocation references symbol out of range", e->path, NULL);
         return -1;
@@ -443,15 +476,15 @@ static int reloc_symval(hld_link *L, hld_elf *e, const hld_shdr *symsh,
     if (ELF64_ST_BIND(s->info) != STB_LOCAL && s->name[0]) {
         g = hld_sym_lookup(L, s->name);
         if (g && (g->kind == HLD_SYM_DEFINED || g->kind == HLD_SYM_ABS)) {
-            *out = g->value;
+            *gp_out = g;
             return 0;
         }
-        if (g && g->bind == STB_WEAK) { *out = 0; return 0; }
+        if (g && g->bind == STB_WEAK) return 0;   /* undefined weak: 0 */
         lerr(L, "undefined symbol `%s'", s->name, NULL);
         return -1;
     }
     /* local: section-relative */
-    if (s->shndx == SHN_ABS) { *out = s->value; return 0; }
+    if (s->shndx == SHN_ABS) { *off_out += s->value; return 0; }
     if (s->shndx >= e->eh.shnum) {
         lerr(L, "%s: bad section index in symbol", e->path, NULL);
         return -1;
@@ -462,7 +495,185 @@ static int reloc_symval(hld_link *L, hld_elf *e, const hld_shdr *symsh,
              e->path, e->shdrs[s->shndx].name);
         return -1;
     }
-    *out = in->out->addr + in->out_off + s->value;
+    *in_out = in;
+    *off_out += s->value;
+    return 0;
+}
+
+/* Final address of a resolved target. Valid only after layout. */
+static uint64_t target_addr(hld_gsym *g, isec *in, uint64_t off)
+{
+    if (g) return g->value + off;
+    if (in) return in->out->addr + in->out_off + off;
+    return off;                     /* absolute, or undefined weak (0) */
+}
+
+/* ---- linkage tables (DLT / function descriptors) ----------------------- */
+
+static unsigned lnk_hash(hld_gsym *g, isec *in, uint64_t off)
+{
+    uintptr_t k = (uintptr_t)g ^ (uintptr_t)in;
+    return (unsigned)((k ^ (k >> 16) ^ (uintptr_t)off) % HLD_LNKHASH);
+}
+
+static lnkent *lnk_get(hld_link *L, lnkent **hash, lnkent ***tail,
+                       lnkent **head, uint64_t *count, uint64_t entsize,
+                       hld_gsym *g, isec *in, uint64_t off, int is_fptr)
+{
+    unsigned h = lnk_hash(g, in, off);
+    lnkent *l;
+
+    (void)L;
+    for (l = hash[h]; l; l = l->hnext)
+        if (l->g == g && l->in == in && l->off == off && l->is_fptr == is_fptr)
+            return l;
+    l = calloc(1, sizeof *l);
+    if (!l) return NULL;
+    l->g = g;
+    l->in = in;
+    l->off = off;
+    l->is_fptr = is_fptr;
+    l->slot = *count * entsize;
+    (*count)++;
+    l->hnext = hash[h];
+    hash[h] = l;
+    if (!*head) { *head = l; *tail = &l->next; }
+    else { **tail = l; *tail = &l->next; }
+    return l;
+}
+
+static lnkent *dlt_get(hld_link *L, hld_gsym *g, isec *in, uint64_t off,
+                       int is_fptr)
+{
+    return lnk_get(L, L->dlt_hash, &L->dlt_tail, &L->dlt, &L->ndlt, 8,
+                   g, in, off, is_fptr);
+}
+
+static lnkent *opd_get(hld_link *L, hld_gsym *g, isec *in, uint64_t off)
+{
+    return lnk_get(L, L->opd_hash, &L->opd_tail, &L->opd, &L->nopd, 16,
+                   g, in, off, 0);
+}
+
+/* The descriptor allocated for a target, if any. */
+static lnkent *opd_find(hld_link *L, hld_gsym *g, isec *in, uint64_t off)
+{
+    lnkent *l;
+    for (l = L->opd_hash[lnk_hash(g, in, off)]; l; l = l->hnext)
+        if (l->g == g && l->in == in && l->off == off)
+            return l;
+    return NULL;
+}
+
+/*
+ * Walk every relocation and reserve the linkage-table slots it will need,
+ * before addresses are assigned so the tables can be laid out like any other
+ * section.
+ *
+ *   LTOFF*      -> a DLT slot holding the target's address
+ *   LTOFF_FPTR* -> a descriptor, plus a DLT slot holding the descriptor's
+ *                  address
+ *   FPTR*       -> a descriptor, addressed directly
+ */
+int hld_alloc_linkage(hld_link *L)
+{
+    size_t i;
+    uint32_t j;
+
+    for (i = 0; i < L->nobjs; i++) {
+        hld_elf *e = L->objs[i];
+        for (j = 1; j < e->eh.shnum; j++) {
+            hld_shdr *rsh = &e->shdrs[j];
+            hld_rela *rel;
+            hld_sym *syms;
+            size_t nrel, nsyms, k;
+            char err[HLD_ERRSZ];
+
+            if (rsh->type != SHT_RELA) continue;
+            if (rsh->info == 0 || rsh->info >= e->eh.shnum) continue;
+            if (!(e->shdrs[rsh->info].flags & SHF_ALLOC)) continue;
+            if (!isec_of(L, e, rsh->info)) continue;
+            if (rsh->link >= e->eh.shnum) continue;
+
+            rel = hld_read_relas(e, rsh, &nrel, err);
+            if (!rel) { snprintf(L->err, HLD_ERRSZ, "%s", err); return -1; }
+            syms = hld_read_syms(e, &e->shdrs[rsh->link], &nsyms, err);
+            if (!syms) {
+                snprintf(L->err, HLD_ERRSZ, "%s", err);
+                free(rel);
+                return -1;
+            }
+
+            for (k = 0; k < nrel; k++) {
+                const hld_rela *r = &rel[k];
+                hld_gsym *g;
+                isec *in;
+                uint64_t off;
+                const char *nm;
+                int want_dlt = 0, want_opd = 0;
+
+                switch (r->type) {
+                case R_IA64_LTOFF22:
+                case R_IA64_LTOFF22X:
+                case R_IA64_LTOFF64I:
+                    want_dlt = 1;
+                    break;
+                case R_IA64_LTOFF_FPTR22:
+                case R_IA64_LTOFF_FPTR64I:
+                case R_IA64_LTOFF_FPTR32MSB:
+                case R_IA64_LTOFF_FPTR32LSB:
+                case R_IA64_LTOFF_FPTR64MSB:
+                case R_IA64_LTOFF_FPTR64LSB:
+                    want_dlt = want_opd = 1;
+                    break;
+                case R_IA64_FPTR64I:
+                case R_IA64_FPTR32MSB:
+                case R_IA64_FPTR32LSB:
+                case R_IA64_FPTR64MSB:
+                case R_IA64_FPTR64LSB:
+                    want_opd = 1;
+                    break;
+                default:
+                    continue;
+                }
+                if (reloc_target(L, e, syms, nsyms, r, &g, &in, &off, &nm) < 0) {
+                    free(syms); free(rel);
+                    return -1;
+                }
+                if (want_opd && !opd_get(L, g, in, off)) goto oom;
+                if (want_dlt && !dlt_get(L, g, in, off, want_opd)) goto oom;
+                continue;
+oom:
+                lerr(L, "out of memory", NULL, NULL);
+                free(syms); free(rel);
+                return -1;
+            }
+            free(syms);
+            free(rel);
+        }
+    }
+
+    /*
+     * The DLT is reached gp-relatively, so it must sit in the short-addressable
+     * data region. Descriptors are reached by absolute address, and in an
+     * executable they are fully resolved at link time, so they can live in the
+     * read-only text segment (which is where HP's linker puts them too).
+     */
+    if (L->ndlt) {
+        L->dltsec = osec_get(L, ".dlt", SHT_PROGBITS,
+                             SHF_ALLOC | SHF_WRITE | SHF_IA_64_SHORT);
+        if (!L->dltsec) { lerr(L, "out of memory", NULL, NULL); return -1; }
+        L->dltsec->size = L->ndlt * 8;
+        L->dltsec->align = 16;
+        L->dltsec->entsize = 8;
+    }
+    if (L->nopd) {
+        L->opdsec = osec_get(L, ".opd", SHT_PROGBITS, SHF_ALLOC);
+        if (!L->opdsec) { lerr(L, "out of memory", NULL, NULL); return -1; }
+        L->opdsec->size = L->nopd * 16;
+        L->opdsec->align = 16;
+        L->opdsec->entsize = 16;
+    }
     return 0;
 }
 
@@ -477,6 +688,7 @@ int hld_build_contents(hld_link *L)
 {
     osec *o;
     isec *in;
+    lnkent *l;
     char err[HLD_ERRSZ];
 
     for (o = L->osecs; o; o = o->next) {
@@ -492,6 +704,28 @@ int hld_build_contents(hld_link *L)
             memcpy(o->data + in->out_off, src, (size_t)in->sh->size);
         }
     }
+
+    /*
+     * Fill the linkage tables now that every address is final. A function
+     * descriptor is {entry point, gp}; a DLT slot holds either a plain
+     * address or, for the FPTR forms, the address of a descriptor.
+     */
+    if (L->opdsec && L->opdsec->data)
+        for (l = L->opd; l; l = l->next) {
+            st64(L->opdsec->data + l->slot, target_addr(l->g, l->in, l->off));
+            st64(L->opdsec->data + l->slot + 8, L->gp);
+        }
+    if (L->dltsec && L->dltsec->data)
+        for (l = L->dlt; l; l = l->next) {
+            uint64_t v;
+            if (l->is_fptr) {
+                lnkent *d = opd_find(L, l->g, l->in, l->off);
+                v = d ? L->opdsec->addr + d->slot : 0;
+            } else {
+                v = target_addr(l->g, l->in, l->off);
+            }
+            st64(L->dltsec->data + l->slot, v);
+        }
     return 0;
 }
 
@@ -537,17 +771,22 @@ int hld_relocate(hld_link *L)
             dst = in->out->data + in->out_off;
             for (k = 0; k < nrel; k++) {
                 const hld_rela *r = &rel[k];
-                uint64_t S = 0, A = (uint64_t)r->addend, P, V;
+                uint64_t S, P, V;
                 uint64_t where = in->out->addr + in->out_off + (r->offset & ~3ULL);
                 unsigned slot = (unsigned)(r->offset & 3);
                 const char *sname = "";
+                hld_gsym *tg;
+                isec *tin;
+                uint64_t toff;
+                lnkent *ent;
                 hld_patch_status st;
 
-                if (reloc_symval(L, e, &e->shdrs[rsh->link], syms, nsyms, r,
-                                 &S, &sname) < 0) {
+                if (reloc_target(L, e, syms, nsyms, r, &tg, &tin, &toff,
+                                 &sname) < 0) {
                     free(syms); free(rel);
                     return -1;
                 }
+                S = target_addr(tg, tin, toff);
                 P = where;
 
                 switch (r->type) {
@@ -562,7 +801,44 @@ int hld_relocate(hld_link *L)
                 case R_IA64_DIR32LSB:
                 case R_IA64_DIR64MSB:
                 case R_IA64_DIR64LSB:
-                    V = S + A;
+                    V = S;
+                    break;
+
+                /* DLT (GOT) access: the gp-relative offset of the slot. */
+                case R_IA64_LTOFF22:
+                case R_IA64_LTOFF22X:
+                case R_IA64_LTOFF64I:
+                    ent = dlt_get(L, tg, tin, toff, 0);
+                    if (!ent) { lerr(L, "out of memory", NULL, NULL); goto rfail; }
+                    V = L->dltsec->addr + ent->slot - L->gp;
+                    break;
+
+                /* Same, but the slot holds the address of a descriptor. */
+                case R_IA64_LTOFF_FPTR22:
+                case R_IA64_LTOFF_FPTR64I:
+                case R_IA64_LTOFF_FPTR32MSB:
+                case R_IA64_LTOFF_FPTR32LSB:
+                case R_IA64_LTOFF_FPTR64MSB:
+                case R_IA64_LTOFF_FPTR64LSB:
+                    ent = dlt_get(L, tg, tin, toff, 1);
+                    if (!ent) { lerr(L, "out of memory", NULL, NULL); goto rfail; }
+                    V = L->dltsec->addr + ent->slot - L->gp;
+                    break;
+
+                /* The descriptor's own address. */
+                case R_IA64_FPTR64I:
+                case R_IA64_FPTR32MSB:
+                case R_IA64_FPTR32LSB:
+                case R_IA64_FPTR64MSB:
+                case R_IA64_FPTR64LSB:
+                    ent = opd_find(L, tg, tin, toff);
+                    if (!ent) {
+                        snprintf(L->err, HLD_ERRSZ,
+                                 "%s: no descriptor allocated for `%s'",
+                                 e->path, sname);
+                        goto rfail;
+                    }
+                    V = L->opdsec->addr + ent->slot;
                     break;
 
                 case R_IA64_GPREL22:
@@ -571,7 +847,7 @@ int hld_relocate(hld_link *L)
                 case R_IA64_GPREL32LSB:
                 case R_IA64_GPREL64MSB:
                 case R_IA64_GPREL64LSB:
-                    V = S + A - L->gp;
+                    V = S - L->gp;
                     break;
 
                 case R_IA64_PCREL21B:
@@ -585,7 +861,7 @@ int hld_relocate(hld_link *L)
                 case R_IA64_PCREL32LSB:
                 case R_IA64_PCREL64MSB:
                 case R_IA64_PCREL64LSB:
-                    V = S + A - P;
+                    V = S - P;
                     break;
 
                 case R_IA64_SEGREL32MSB:
@@ -594,7 +870,7 @@ int hld_relocate(hld_link *L)
                 case R_IA64_SEGREL64LSB: {
                     uint64_t base = (S >= HLD_DATA_BASE) ? L->data_addr
                                                          : L->text_addr;
-                    V = S + A - base;
+                    V = S - base;
                     break;
                 }
 
@@ -602,7 +878,7 @@ int hld_relocate(hld_link *L)
                 case R_IA64_SECREL32LSB:
                 case R_IA64_SECREL64MSB:
                 case R_IA64_SECREL64LSB:
-                    V = S + A - in->out->addr;
+                    V = S - in->out->addr;
                     break;
 
                 default:
@@ -635,9 +911,12 @@ int hld_relocate(hld_link *L)
                              e->path,
                              hld_reloc_name(r->type) ? hld_reloc_name(r->type) : "?",
                              sname);
-                    free(syms); free(rel);
-                    return -1;
+                    goto rfail;
                 }
+                continue;
+rfail:
+                free(syms); free(rel);
+                return -1;
             }
             free(syms);
             free(rel);
