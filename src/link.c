@@ -1032,6 +1032,30 @@ int hld_relocate(hld_link *L)
                     }
                     break;
 
+                /*
+                 * An import-PLT relocation inside an input object asks for a
+                 * function descriptor to be written at the site itself —
+                 * C++ vtable slots are built this way. Sixteen bytes, so it
+                 * is placed here rather than through the field inserter.
+                 */
+                case R_IA64_IPLTMSB:
+                case R_IA64_IPLTLSB:
+                    if (tg && tg->kind == HLD_SYM_IMPORT) {
+                        snprintf(L->err, HLD_ERRSZ,
+                                 "%s: `%s' is imported and needs a descriptor "
+                                 "bound at run time, which hld cannot emit yet",
+                                 e->path, sname);
+                        goto rfail;
+                    }
+                    if (r->type == R_IA64_IPLTMSB) {
+                        st64(dst + r->offset, S);
+                        st64(dst + r->offset + 8, L->gp);
+                    } else {
+                        stle64(dst + r->offset, S);
+                        stle64(dst + r->offset + 8, L->gp);
+                    }
+                    continue;
+
                 /* The descriptor's own address. */
                 case R_IA64_FPTR64I:
                 case R_IA64_FPTR32MSB:
