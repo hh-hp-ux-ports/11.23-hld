@@ -59,17 +59,30 @@ static uint8_t *read_whole_file(const char *path, size_t *size, char *err)
     return buf;
 }
 
-hld_elf *hld_elf_load(const char *path, char *err)
+/*
+ * Parse an image already in memory. When `owns_data` is zero the buffer
+ * belongs to the caller and outlives this object — that is how archive
+ * members are read, borrowing the archive's own buffer rather than copying.
+ */
+hld_elf *hld_elf_from_memory(const char *name, uint8_t *data, size_t size,
+                             int owns_data, char *err)
 {
     hld_elf *e;
     const uint8_t *p;
     uint32_t i;
+    const char *path = name;
 
     e = calloc(1, sizeof *e);
-    if (!e) { seterr(err, "out of memory", NULL, NULL); return NULL; }
-    e->path = xstrdup(path);
-    e->data = read_whole_file(path, &e->size, err);
-    if (!e->data || !e->path) goto fail_noerr;
+    if (!e) {
+        seterr(err, "out of memory", NULL, NULL);
+        if (owns_data) free(data);
+        return NULL;
+    }
+    e->path = xstrdup(name);
+    e->data = data;
+    e->size = size;
+    e->owns_data = owns_data;
+    if (!e->path) goto fail_noerr;
 
     if (e->size < EHDR64_SIZE || memcmp(e->data, ELFMAG, 4) != 0) {
         seterr(err, "%s: not an ELF file", path, NULL);
@@ -160,11 +173,21 @@ fail_noerr:
     return NULL;
 }
 
+hld_elf *hld_elf_load(const char *path, char *err)
+{
+    uint8_t *data;
+    size_t size;
+
+    data = read_whole_file(path, &size, err);
+    if (!data) return NULL;
+    return hld_elf_from_memory(path, data, size, 1, err);
+}
+
 void hld_elf_free(hld_elf *e)
 {
     if (!e) return;
     free(e->path);
-    free(e->data);
+    if (e->owns_data) free(e->data);
     free(e->shdrs);
     free(e->phdrs);
     free(e);

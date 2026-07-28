@@ -503,7 +503,14 @@ int hld_add_dso(hld_link *L, const char *path)
     else { *L->dso_tail = d; L->dso_tail = &d->next; }
     L->ndsos++;
     L->dynamic = 1;                     /* using a library implies dynamic */
-    return 0;
+
+    /*
+     * Bind what is undefined right now, at this library's position on the
+     * command line, so an archive searched later is not asked for a symbol
+     * this library has already supplied. A library stays available for
+     * symbols that come up afterwards, which hld_bind_imports() sweeps up.
+     */
+    return hld_bind_imports(L);
 }
 
 /* Bind still-undefined symbols to library exports. */

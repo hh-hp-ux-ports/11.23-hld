@@ -144,8 +144,8 @@ typedef struct {
 
 /* link.c */
 int  hld_add_object(hld_link *L, const char *path);
-int  hld_collect_sections(hld_link *L);
-int  hld_resolve_symbols(hld_link *L);
+int  hld_input_object(hld_link *L, hld_elf *e);
+int  hld_allocate_commons(hld_link *L);
 int  hld_alloc_linkage(hld_link *L);
 int  hld_layout(hld_link *L);
 int  hld_build_contents(hld_link *L);

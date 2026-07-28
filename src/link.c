@@ -61,15 +61,7 @@ int hld_add_object(hld_link *L, const char *path)
         hld_elf_free(e);
         return -1;
     }
-    if (L->nobjs == L->objs_cap) {
-        size_t nc = L->objs_cap ? L->objs_cap * 2 : 8;
-        hld_elf **na = realloc(L->objs, nc * sizeof *na);
-        if (!na) { lerr(L, "out of memory", NULL, NULL); hld_elf_free(e); return -1; }
-        L->objs = na;
-        L->objs_cap = nc;
-    }
-    L->objs[L->nobjs++] = e;
-    return 0;
+    return hld_input_object(L, e);
 }
 
 /* ---- output sections --------------------------------------------------- */
@@ -117,13 +109,11 @@ static int sec_is_text(uint64_t flags)
     return (flags & SHF_ALLOC) && !(flags & SHF_WRITE);
 }
 
-int hld_collect_sections(hld_link *L)
+static int collect_sections_of(hld_link *L, hld_elf *e)
 {
-    size_t i;
     uint32_t j;
 
-    for (i = 0; i < L->nobjs; i++) {
-        hld_elf *e = L->objs[i];
+    {
         for (j = 1; j < e->eh.shnum; j++) {
             hld_shdr *sh = &e->shdrs[j];
             osec *o;
@@ -202,15 +192,12 @@ static isec *isec_of(hld_link *L, hld_elf *obj, uint32_t shndx)
     return NULL;
 }
 
-int hld_resolve_symbols(hld_link *L)
+static int resolve_symbols_of(hld_link *L, hld_elf *e)
 {
-    size_t i;
     uint32_t j;
     hld_gsym *g;
-    unsigned h;
 
-    for (i = 0; i < L->nobjs; i++) {
-        hld_elf *e = L->objs[i];
+    {
         for (j = 1; j < e->eh.shnum; j++) {
             hld_sym *syms;
             size_t n, k;
@@ -280,7 +267,41 @@ int hld_resolve_symbols(hld_link *L)
         }
     }
 
-    /* Allocate COMMON into .bss now that all sizes are known. */
+    return 0;
+}
+
+/*
+ * Bring one object into the link: its sections become output contributions
+ * and its symbols enter the table. Inputs are processed in command-line
+ * order, so that an archive searched later sees exactly the symbols that are
+ * still undefined at its position.
+ */
+int hld_input_object(hld_link *L, hld_elf *e)
+{
+    if (L->nobjs == L->objs_cap) {
+        size_t nc = L->objs_cap ? L->objs_cap * 2 : 8;
+        hld_elf **na = realloc(L->objs, nc * sizeof *na);
+        if (!na) { lerr(L, "out of memory", NULL, NULL); return -1; }
+        L->objs = na;
+        L->objs_cap = nc;
+    }
+    L->objs[L->nobjs++] = e;
+
+    if (collect_sections_of(L, e) < 0) return -1;
+    if (resolve_symbols_of(L, e) < 0) return -1;
+    return 0;
+}
+
+/*
+ * Tentative definitions become real storage only once every input has been
+ * seen: a later object (or an extracted archive member) may yet provide a
+ * real definition that this one must not displace.
+ */
+int hld_allocate_commons(hld_link *L)
+{
+    hld_gsym *g;
+    unsigned h;
+
     for (h = 0; h < HLD_SYMHASH; h++) {
         for (g = L->hash[h]; g; g = g->next) {
             osec *bss;

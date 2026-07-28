@@ -453,6 +453,7 @@ typedef struct {
     char *path;
     uint8_t *data;
     size_t size;
+    int owns_data;            /* 0 when the buffer belongs to someone else */
     hld_ehdr eh;
     hld_shdr *shdrs;         /* eh.shnum entries (0 if none) */
     hld_phdr *phdrs;         /* eh.phnum entries */
@@ -461,6 +462,8 @@ typedef struct {
 /* elfread.c */
 #define HLD_ERRSZ 256
 hld_elf *hld_elf_load(const char *path, char *err /* HLD_ERRSZ */);
+hld_elf *hld_elf_from_memory(const char *name, uint8_t *data, size_t size,
+                             int owns_data, char *err);
 void hld_elf_free(hld_elf *e);
 /* Bounds-checked pointer to a section's file bytes (NULL for NOBITS/oob). */
 const uint8_t *hld_sec_data(const hld_elf *e, const hld_shdr *sh, char *err);

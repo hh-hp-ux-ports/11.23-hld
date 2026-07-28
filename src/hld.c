@@ -88,8 +88,7 @@ int main(int argc, char **argv)
 
     if (!ninputs) { usage(); return 1; }
 
-    if (hld_collect_sections(&L) < 0) goto fail;
-    if (hld_resolve_symbols(&L) < 0) goto fail;
+    if (hld_allocate_commons(&L) < 0) goto fail;
     if (hld_bind_imports(&L) < 0) goto fail;
     if (hld_predefine_symbols(&L) < 0) goto fail;
     if (hld_alloc_linkage(&L) < 0) goto fail;
