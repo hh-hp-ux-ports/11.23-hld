@@ -197,6 +197,7 @@ osec *osec_get(hld_link *L, const char *name, uint32_t type, uint64_t flags);
 int  hld_archive_open(hld_link *L, const char *path, hld_archive **out);
 int  hld_archive_search(hld_link *L, hld_archive *ar, int *extracted_any);
 void hld_archive_free(hld_archive *ar);
+int  hld_link_millicode(hld_link *L);
 
 /* dynamic.c */
 int  hld_add_dso(hld_link *L, const char *path);

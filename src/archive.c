@@ -358,6 +358,44 @@ int hld_archive_search(hld_link *L, hld_archive *ar, int *extracted_any)
     return 0;
 }
 
+/*
+ * HP's linker resolves the compiler's millicode helpers from an archive it
+ * knows about without being told, so a plain `cc a.c b.c` links. Anything
+ * still undefined once the command line is exhausted gets one last look
+ * there, which keeps hld a drop-in for that behaviour.
+ */
+int hld_link_millicode(hld_link *L)
+{
+    static const char *const paths[] = {
+        "/usr/lib/hpux64/milli.a", NULL
+    };
+    const char *const *p;
+    unsigned h;
+    hld_gsym *g;
+    int wanted = 0;
+
+    for (h = 0; h < HLD_SYMHASH && !wanted; h++)
+        for (g = L->hash[h]; g; g = g->next)
+            if (g->kind == HLD_SYM_UNDEF && g->bind != STB_WEAK) {
+                wanted = 1;
+                break;
+            }
+    if (!wanted) return 0;
+
+    for (p = paths; *p; p++) {
+        FILE *f = fopen(*p, "rb");
+        hld_archive *ar;
+        if (!f) continue;
+        fclose(f);
+        if (hld_archive_open(L, *p, &ar) < 0) {
+            L->err[0] = 0;          /* not fatal: it was only a guess */
+            return 0;
+        }
+        return hld_archive_search(L, ar, NULL);
+    }
+    return 0;
+}
+
 void hld_archive_free(hld_archive *ar)
 {
     size_t i;

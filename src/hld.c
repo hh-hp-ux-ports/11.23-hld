@@ -52,6 +52,26 @@ int main(int argc, char **argv)
     for (i = 1; i < argc; i++) {
         const char *a = argv[i];
 
+        /*
+         * HP's linker spells some options with a leading '+', so they have to
+         * be recognised before a bare word is taken for a file name.
+         */
+        if (a[0] == '+') {
+            /* two-token forms */
+            if (strcmp(a, "+Accept") == 0 || strcmp(a, "+b") == 0
+                || strcmp(a, "+h") == 0 || strcmp(a, "+e") == 0
+                || strcmp(a, "+nodefaultrpath") == 0) {
+                if (strcmp(a, "+nodefaultrpath") != 0 && i + 1 < argc) ++i;
+                continue;
+            }
+            /* diagnostic-only switches: harmless to accept and ignore */
+            if (strncmp(a, "+v", 2) == 0 || strcmp(a, "+w") == 0
+                || strcmp(a, "+noenvvar") == 0 || strcmp(a, "+compat") == 0) {
+                continue;
+            }
+            fprintf(stderr, "hld: option `%s' is not implemented\n", a);
+            return 1;
+        }
         if (a[0] != '-' || !a[1]) {
             if (hld_add_object(&L, a) < 0) goto fail;
             ninputs++;
@@ -127,7 +147,6 @@ int main(int argc, char **argv)
             if (dir) hld_add_libpath(&L, dir);
             continue;
         }
-        if (strcmp(a, "+Accept") == 0 && i + 1 < argc) { ++i; continue; }
 
         fprintf(stderr, "hld: unrecognized option `%s'\n", a);
         usage();
@@ -136,6 +155,7 @@ int main(int argc, char **argv)
 
     if (!ninputs) { usage(); return 1; }
 
+    if (hld_link_millicode(&L) < 0) goto fail;
     if (hld_allocate_commons(&L) < 0) goto fail;
     if (hld_bind_imports(&L) < 0) goto fail;
     if (hld_predefine_symbols(&L) < 0) goto fail;
