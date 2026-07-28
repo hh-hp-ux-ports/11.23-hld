@@ -43,11 +43,25 @@ defect: a modern gcc's C++ compiler binary is large enough to trigger it and can
 linked correctly by HP ld at all, with no available workaround — it is the immediate
 motivation for this project.
 
-**hld acceptance**: branch-target distance checking is *structural* — every PCREL21B
-whose target is out of range or not text gets a stub island (or brl rewrite), verified
-by an exhaustive post-link scan of all branch targets (a checker tool worth writing
-regardless: `hld-verify` walking every B-unit branch in the output). End goal: link a
-real large compiler binary that exercises this path and confirm it runs correctly.
+**hld acceptance — met.** Branch-target checking is structural: every PCREL21B whose
+target is out of reach is routed through a stub island holding a `brl`, so no direct
+branch can be emitted with a target it cannot encode.
+
+Measured on the C++ compiler binary of a modern gcc (37.6 MB of text), linked from the
+same objects by each linker, then disassembled and scanned for `br.call` instructions
+whose target lies past `_etext`:
+
+| linker | out-of-range `br.call` |
+|---|---|
+| the system linker | **26** |
+| hld | **0** |
+
+End to end: the compiler binary produced by the system linker dies with
+`internal compiler error: Segmentation fault` on the library source file that first
+exposed this (a large C++ translation unit reaching one of those 26 sites through a
+hash-table helper); the same source, same flags, compiled by the same compiler *linked
+by hld* completes and produces its object file. That is the defect this project exists
+to fix, reproduced and closed.
 
 ## Defect 3 — unwind r_offset handling disagreement
 

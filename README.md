@@ -109,9 +109,15 @@ Working today:
   through the code so a caller anywhere has one within range — the defect that
   blocks large compiler binaries.
 
-**It links gcc 9.5's `cc1plus`** — 427 objects and archives, 37 MB of text —
-and the result runs and compiles C++ to assembly identical to that of the same
-compiler linked by the system linker.
+**It links gcc 9.5's compilers** — `cc1`, `cc1plus` and `lto1`, each from several hundred
+objects and archives, 37 MB of text in the largest — and the results run and compile to
+assembly identical to that of the same compilers linked by the system linker.
+
+That last point cuts both ways, so the defect itself was measured directly. Disassembling
+both `cc1plus` binaries and counting `br.call` instructions whose target lies past
+`_etext` gives **26** for the system linker and **0** for hld; and the library source file
+that first exposed the defect fails with `internal compiler error: Segmentation fault`
+under the system linker's binary while compiling cleanly under hld's.
 
 Not there yet: shared-library *output* and debug-section handling. An input hld
 cannot handle is refused with a clear message rather than mis-linked.
