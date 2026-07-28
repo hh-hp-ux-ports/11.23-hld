@@ -40,8 +40,8 @@ Text segment (in address order): `.note.hpux_options`(NOTE) `.interp` `.dynamic`
 `.dynsym` `.dynstr` `.hash`(SHT_HASH, sh_link 0!) `.rela.plt` `.IA_64.unwind_hdr`
 `.IA_64.unwind` (SHT_IA_64_UNWIND, entsize 4 in linked output, sh_info = .text index)
 `.IA_64.unwind_info` `.rodata` `.dynhash`(**PROGBITS** — HP global-hash format, not
-SHT_HASH) `.opd` `.text` `.bortext` (branch-out-of-range stub island; `_etext`/
-`_etext_f` after it).
+SHT_HASH) `.opd` `.text` `.bortext` (the lazy-binding trampoline — see below, *not* branch
+stubs, despite the name; `_etext`/`_etext_f` come after it).
 
 Data segment: `.data` `.HP.init` `.HP.preinit` `.init_array` `.preinit_array`
 `.fini_array` `.plt`(entsize 0x10) `.dlt`(entsize 8) `.sdata` `.sbss` `.bss` `.hbss`
@@ -103,10 +103,12 @@ DIR64MSB (0x26) in data, FPTR/LTOFF_FPTR variants for address-taken functions,
 PCREL64I for long branches.
 
 **In linked outputs (dynamic):** R_IA64_IPLTMSB (0x80, function-descriptor import),
-R_IA64_DIR64MSB (0x26, DLT/data slots). One HP dynamic reloc type, **0x82**, appears in
-libc.so.1 and is absent from the public GNU relocation-numbering headers — identify it
-during dynamic-executable work (candidate: an EPLT/export-descriptor form, since it
-pairs positionally with `DT_HP_EPLTREL`).
+R_IA64_DIR64MSB (0x26, DLT/data slots), R_IA64_FPTR64MSB (0x46, a descriptor the loader
+must make). One HP dynamic reloc type, **0x82**, appears in libc.so.1 and is absent from
+the public GNU relocation-numbering headers; it **writes a 16-byte `{entry, gp}`
+descriptor**, established by reading what the loader's own `.opd` holds at the addresses
+it names. It pairs positionally with `DT_HP_EPLTREL`, so an EPLT/export-descriptor form
+is the likely reading.
 
 ## What the kernel's loader actually requires (static executables)
 
@@ -201,6 +203,26 @@ because it reads the array through `DT_RELA`.
 Getting this wrong is quiet: the slot or word keeps whatever the linker left
 there, and the program faults inside the runtime's own start-up rather than at
 the reference that was mis-resolved.
+
+### Calls beyond a direct branch's reach
+
+`R_IA64_PCREL21B` carries 21 bits of bundle-granular displacement: ±16 MB. A
+larger text — a C++ compiler's is more than twice that — means some calls cannot
+be encoded at all and have to be routed through a stub near the caller. A single
+bundle of `brl.cond.sptk.many` does it: a 60-bit displacement, no register
+clobbered, and `b0` untouched, so the callee still returns to the original
+caller. `brl` is an Itanium 2 instruction and every machine running this ABI
+has it.
+
+Placement is the real constraint: one stub section at the end of the image is
+itself unreachable from the front of a large text, so stubs have to be spread
+through the code at intervals below the branch's reach. Code is not all in
+`.text` either — a C++ compiler emits thousands of one-function
+`.gnu.linkonce.t.*` sections, and a call from any of them may need a stub.
+
+(HP's `.bortext` is *not* this. It holds the lazy-binding trampoline: one
+`mov r15=<index>; br.few <resolver>` per import, plus the resolver preamble
+that loads the entry point and gp from the descriptor.)
 
 ### Calling an imported function
 

@@ -105,10 +105,16 @@ Working today:
 - Thread-local storage, initializer and finalizer arrays, and one merged, sorted
   unwind table with its header and segment — enough for C++ exceptions.
 
-Not there yet: shared-library *output*, long-branch stubs for text beyond a
-branch's reach (the defect that blocks the large compiler binaries this project
-is aimed at), and debug-section handling. An input hld cannot handle is refused
-with a clear message rather than mis-linked.
+- Long-branch stubs for calls beyond a direct branch's 16 MB reach, spread
+  through the code so a caller anywhere has one within range — the defect that
+  blocks large compiler binaries.
+
+**It links gcc 9.5's `cc1plus`** — 427 objects and archives, 37 MB of text —
+and the result runs and compiles C++ to assembly identical to that of the same
+compiler linked by the system linker.
+
+Not there yet: shared-library *output* and debug-section handling. An input hld
+cannot handle is refused with a clear message rather than mis-linked.
 
 ## License
 
