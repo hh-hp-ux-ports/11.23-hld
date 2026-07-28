@@ -5,7 +5,7 @@ lives there, but it works as an ordinary user — no root needed to *build* one.
 
 ```
 make CC="gcc -mlp64"
-make package                    # -> build/hld-<version>-ia64-11.23.depot
+make package                    # -> build/hld-<version>-ia64-11.23.depot.gz
 ```
 
 The result is a gzipped serial depot: one product, `HLD`, in three filesets.
