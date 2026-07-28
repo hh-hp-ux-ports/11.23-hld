@@ -871,6 +871,50 @@ static lnkent *opd_find(hld_link *L, hld_gsym *g, isec *in, uint64_t off)
 }
 
 /*
+ * True when a relocation stores the address of an imported symbol into a
+ * data word. hld has no address to store: the symbol belongs to a shared
+ * library, so the loader must write the word from a dynamic relocation.
+ * Everything else about an import resolves here — a call goes to the stub,
+ * and a linkage-table slot is handled with the rest of the table.
+ */
+static int hld_dynrel_type(const hld_gsym *g, uint32_t type, uint32_t *out)
+{
+    if (!g || g->kind != HLD_SYM_IMPORT) return 0;
+    switch (type) {
+    case R_IA64_DIR64MSB:
+    case R_IA64_DIR64LSB:
+        *out = R_IA64_DIR64MSB;
+        return 1;
+    case R_IA64_FPTR64MSB:
+    case R_IA64_FPTR64LSB:
+        /* The canonical descriptor is the defining module's to make. */
+        *out = R_IA64_FPTR64MSB;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int dynrel_add(hld_link *L, isec *in, uint64_t off, hld_gsym *g,
+                      uint64_t addend, uint32_t type)
+{
+    if (L->ndynrel == L->dynrel_cap) {
+        size_t cap = L->dynrel_cap ? L->dynrel_cap * 2 : 16;
+        dynrel *n = realloc(L->dynrels, cap * sizeof *n);
+        if (!n) return -1;
+        L->dynrels = n;
+        L->dynrel_cap = cap;
+    }
+    L->dynrels[L->ndynrel].in = in;
+    L->dynrels[L->ndynrel].off = off;
+    L->dynrels[L->ndynrel].g = g;
+    L->dynrels[L->ndynrel].addend = addend;
+    L->dynrels[L->ndynrel].type = type;
+    L->ndynrel++;
+    return 0;
+}
+
+/*
  * Walk every relocation and reserve the linkage-table slots it will need,
  * before addresses are assigned so the tables can be laid out like any other
  * section.
@@ -893,11 +937,13 @@ int hld_alloc_linkage(hld_link *L)
             hld_sym *syms;
             size_t nrel, nsyms, k;
             char err[HLD_ERRSZ];
+            isec *site;
 
             if (rsh->type != SHT_RELA) continue;
             if (rsh->info == 0 || rsh->info >= e->eh.shnum) continue;
             if (!(e->shdrs[rsh->info].flags & SHF_ALLOC)) continue;
-            if (!isec_of(L, e, rsh->info)) continue;
+            site = isec_of(L, e, rsh->info);
+            if (!site) continue;
             if (rsh->link >= e->eh.shnum) continue;
 
             rel = hld_read_relas(e, rsh, &nrel, err);
@@ -915,7 +961,8 @@ int hld_alloc_linkage(hld_link *L)
                 isec *in;
                 uint64_t off;
                 const char *nm;
-                int want_dlt = 0, want_opd = 0, want_pltoff = 0;
+                int want_dlt = 0, want_opd = 0, want_pltoff = 0, want_dyn = 0;
+                uint32_t dtype;
 
                 switch (r->type) {
                 case R_IA64_LTOFF22:
@@ -934,9 +981,15 @@ int hld_alloc_linkage(hld_link *L)
                 case R_IA64_FPTR64I:
                 case R_IA64_FPTR32MSB:
                 case R_IA64_FPTR32LSB:
+                    want_opd = 1;
+                    break;
                 case R_IA64_FPTR64MSB:
                 case R_IA64_FPTR64LSB:
-                    want_opd = 1;
+                    want_opd = want_dyn = 1;
+                    break;
+                case R_IA64_DIR64MSB:
+                case R_IA64_DIR64LSB:
+                    want_dyn = 1;
                     break;
                 case R_IA64_PLTOFF22:
                 case R_IA64_PLTOFF64I:
@@ -950,6 +1003,11 @@ int hld_alloc_linkage(hld_link *L)
                 if (reloc_target(L, e, syms, nsyms, r, &g, &in, &off, &nm) < 0) {
                     free(syms); free(rel);
                     return -1;
+                }
+                if (want_dyn && hld_dynrel_type(g, r->type, &dtype)) {
+                    if (dynrel_add(L, site, r->offset, g, off, dtype) < 0) goto oom;
+                    /* The other module owns the descriptor; don't make one. */
+                    continue;
                 }
                 if (want_opd && !opd_get(L, g, in, off)) goto oom;
                 if (want_dlt && !dlt_get(L, g, in, off, want_opd)) goto oom;
@@ -1049,7 +1107,18 @@ int hld_build_contents(hld_link *L)
     if (L->dltsec && L->dltsec->data)
         for (l = L->dlt; l; l = l->next) {
             uint64_t v;
-            if (l->is_fptr) {
+            if (l->g && l->g->kind == HLD_SYM_IMPORT) {
+                /*
+                 * The target lives in a shared library, so its address is
+                 * not ours to write: the loader fills this slot from the
+                 * dynamic relocation emitted alongside it. A plain address
+                 * is seeded with the link-time binding as a hint, the way
+                 * the platform's linker does; a descriptor slot stays zero,
+                 * because only the loader can make the canonical descriptor
+                 * for a function it owns.
+                 */
+                v = l->is_fptr ? 0 : l->g->hint;
+            } else if (l->is_fptr) {
                 lnkent *d = opd_find(L, l->g, l->in, l->off);
                 v = d ? L->opdsec->addr + d->slot : 0;
             } else {
@@ -1111,6 +1180,7 @@ int hld_relocate(hld_link *L)
                 uint64_t toff;
                 lnkent *ent;
                 hld_patch_status st;
+                uint32_t dyntype;
 
                 if (reloc_target(L, e, syms, nsyms, r, &tg, &tin, &toff,
                                  &sname) < 0) {
@@ -1119,6 +1189,16 @@ int hld_relocate(hld_link *L)
                 }
                 S = target_addr(tg, tin, toff);
                 P = where;
+
+                /*
+                 * An import's `value` is its call stub, which is the right
+                 * answer for a branch and meaningless for a data word. Seed
+                 * the word with the link-time binding instead — the loader
+                 * overwrites it from the dynamic relocation recorded for this
+                 * site when the linkage tables were built.
+                 */
+                if (hld_dynrel_type(tg, r->type, &dyntype))
+                    S = tg->hint + toff;
 
                 switch (r->type) {
                 case R_IA64_NONE:
@@ -1353,6 +1433,7 @@ void hld_link_free(hld_link *L)
 
     for (i = 0; i < L->nobjs; i++) hld_elf_free(L->objs[i]);
     free(L->objs);
+    free(L->dynrels);
     {
         hld_archive *ar, *arn;
         for (ar = L->archives; ar; ar = arn) { arn = ar->next; hld_archive_free(ar); }

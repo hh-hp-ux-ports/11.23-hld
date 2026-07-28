@@ -123,6 +123,20 @@ typedef struct lnkent {
     struct lnkent *next;      /* allocation order, for filling contents */
 } lnkent;
 
+/*
+ * A data word that has to hold the address of something in another module.
+ * hld cannot write it — only the loader knows where the other module lands —
+ * so the word is seeded with the link-time binding and handed to the loader
+ * as a dynamic relocation.
+ */
+typedef struct dynrel {
+    struct isec *in;          /* input section holding the word */
+    uint64_t off;             /* offset within that section */
+    struct hld_gsym *g;       /* the imported symbol */
+    uint64_t addend;          /* added to the symbol's address */
+    uint32_t type;            /* R_IA64_DIR64MSB or R_IA64_FPTR64MSB */
+} dynrel;
+
 typedef struct {
     /* inputs */
     hld_elf **objs;
@@ -167,7 +181,11 @@ typedef struct {
     int dynamic;
     hld_dso *dsos, **dso_tail;
     size_t ndsos, nimports;
-    osec *pltsec, *relapltsec, *stubsec;
+    uint64_t ndltrel;         /* DLT slots the loader has to fill */
+    dynrel *dynrels;          /* data words naming another module's symbol */
+    size_t ndynrel, dynrel_cap;
+    uint64_t nreladyn;        /* entries written to .rela.dyn so far */
+    osec *pltsec, *reladynsec, *stubsec;
     char **libpaths;
     size_t nlibpaths, libpaths_cap;
     char *dynstr;

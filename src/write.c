@@ -257,9 +257,9 @@ int hld_write_exec(hld_link *L)
                     && (o == L->dynsymsec || o == L->dynamicsec))
                     link = L->dynstrsec->shndx;
                 if (L->dynamic && L->dynsymsec
-                    && (o == L->hashsec || o == L->relapltsec))
+                    && (o == L->hashsec || o == L->reladynsec))
                     link = L->dynsymsec->shndx;
-                if (L->dynamic && L->pltsec && o == L->relapltsec)
+                if (L->dynamic && L->pltsec && o == L->reladynsec)
                     info = L->pltsec->shndx;
                 put_shdr(shtab + o->shndx * SHDR64_SIZE, names[k], o->type,
                          o->flags, o->addr, o->off, o->size, link, info,

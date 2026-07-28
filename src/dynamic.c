@@ -103,6 +103,7 @@ int hld_alloc_dynamic(hld_link *L)
     unsigned h;
     hld_gsym *g;
     hld_dso *d;
+    lnkent *l;
     uint64_t nimp = 0;
 
     if (!L->dynamic) return 0;
@@ -172,12 +173,23 @@ int hld_alloc_dynamic(hld_link *L)
         o->entsize = 16;
         L->pltsec = o;
 
-        o = osec_get(L, ".rela.plt", SHT_RELA, SHF_ALLOC);
+        /*
+         * Everything the loader has to write goes in one array: the import
+         * descriptors, the linkage-table slots that name another module, and
+         * the data words holding such an address. Keeping them together means
+         * one DT_RELA span to advertise, with no assumption about how the
+         * sections happen to be laid out.
+         */
+        L->ndltrel = 0;
+        for (l = L->dlt; l; l = l->next)
+            if (l->g && l->g->kind == HLD_SYM_IMPORT) L->ndltrel++;
+
+        o = osec_get(L, ".rela.dyn", SHT_RELA, SHF_ALLOC);
         if (!o) return -1;
-        o->size = nimp * RELA64_SIZE;
+        o->size = (nimp + L->ndltrel + L->ndynrel) * RELA64_SIZE;
         o->align = 8;
         o->entsize = RELA64_SIZE;
-        L->relapltsec = o;
+        L->reladynsec = o;
 
         o = osec_get(L, ".stub", SHT_PROGBITS,
                      SHF_ALLOC | SHF_EXECINSTR);
@@ -209,6 +221,21 @@ int hld_alloc_dynamic(hld_link *L)
     o->size += LOAD_MAP_SIZE;
     L->reservesec = o;
     return 0;
+}
+
+/* Append one entry to the relocation array the loader walks at load time. */
+static void reladyn_add(hld_link *L, uint64_t where, uint32_t dynidx,
+                        uint32_t type, uint64_t addend)
+{
+    uint8_t *rp;
+
+    if (!L->reladynsec || !L->reladynsec->data) return;
+    if ((L->nreladyn + 1) * RELA64_SIZE > L->reladynsec->size) return;
+    rp = L->reladynsec->data + L->nreladyn * RELA64_SIZE;
+    st64(rp + 0, where);
+    st64(rp + 8, ELF64_R_INFO(dynidx, type));
+    st64(rp + 16, addend);
+    L->nreladyn++;
 }
 
 /* Fill the dynamic sections; called once every address is final. */
@@ -287,12 +314,37 @@ int hld_fill_dynamic(hld_link *L)
             }
     }
 
+    /*
+     * Tell the loader which linkage-table slots name something in a shared
+     * library. A plain address slot takes DIR64; a descriptor slot takes
+     * FPTR64, which asks the loader for the canonical descriptor of a
+     * function it owns — hld cannot build that one itself, since the entry
+     * point and gp both belong to the other module. Without these the slot
+     * stays as hld left it and the program dereferences a null pointer the
+     * first time it uses the symbol.
+     */
+    {
+        lnkent *l;
+        size_t n;
+        for (l = L->dlt; l; l = l->next) {
+            if (!l->g || l->g->kind != HLD_SYM_IMPORT) continue;
+            reladyn_add(L, L->dltsec->addr + l->slot, l->g->dynidx,
+                        l->is_fptr ? R_IA64_FPTR64MSB : R_IA64_DIR64MSB, 0);
+        }
+        /* And the data words that hold another module's address. */
+        for (n = 0; n < L->ndynrel; n++) {
+            dynrel *dr = &L->dynrels[n];
+            reladyn_add(L, dr->in->out->addr + dr->in->out_off + dr->off,
+                        dr->g->dynidx, dr->type, dr->addend);
+        }
+    }
+
     /* Import descriptors, their relocations, and the call stubs. */
     if (L->nimports) {
         for (h = 0; h < HLD_SYMHASH; h++)
             for (g = L->hash[h]; g; g = g->next) {
                 uint64_t plt_addr;
-                uint8_t *rp, *sp;
+                uint8_t *sp;
 
                 if (g->kind != HLD_SYM_IMPORT) continue;
                 plt_addr = L->pltsec->addr + g->plt_slot;
@@ -307,13 +359,7 @@ int hld_fill_dynamic(hld_link *L)
                     st64(L->pltsec->data + g->plt_slot, g->hint);
                     st64(L->pltsec->data + g->plt_slot + 8, L->gp);
                 }
-                if (L->relapltsec->data) {
-                    rp = L->relapltsec->data
-                         + (g->plt_slot / 16) * RELA64_SIZE;
-                    st64(rp + 0, plt_addr);
-                    st64(rp + 8, ELF64_R_INFO(g->dynidx, R_IA64_IPLTMSB));
-                    st64(rp + 16, 0);
-                }
+                reladyn_add(L, plt_addr, g->dynidx, R_IA64_IPLTMSB, 0);
                 if (L->stubsec->data) {
                     sp = L->stubsec->data + g->stub_off;
                     memcpy(sp, hld_stub_template, STUB_SIZE);
@@ -362,8 +408,8 @@ int hld_fill_dynamic(hld_link *L)
              * process it a second time and reject the image, since hld asks
              * for immediate binding and the entries are already applied.
              */
-            DYN(DT_RELA, L->relapltsec->addr);
-            DYN(DT_RELASZ, L->relapltsec->size);
+            DYN(DT_RELA, L->reladynsec->addr);
+            DYN(DT_RELASZ, L->reladynsec->size);
             DYN(DT_RELAENT, RELA64_SIZE);
         }
         /*
