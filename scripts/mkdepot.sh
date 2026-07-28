@@ -15,8 +15,11 @@
 #              binaries and the source they were built from travel together
 #              (GPLv3 section 6)
 #
-# A serial depot is the form swpackage can produce without root; see
-# docs/packaging.md for installing it and for how the PATH override behaves.
+# A serial depot is the form swpackage can produce without root, and it is
+# then gzipped, which is how HP-UX depots are normally handed around. SD's own
+# file compression is not usable here: it is rejected for a serial depot and
+# for swpackage's default reinstall_files=false, and building the directory
+# depot it would require needs root. See docs/packaging.md.
 
 set -e
 
@@ -196,8 +199,45 @@ swpackage -s $PSF -x target_type=tape -d "$OUT" > build/swpackage.log 2>&1 || {
 }
 
 echo "built $OUT"
-swlist -s "`pwd`/$OUT" 2>/dev/null | sed -n '/HLD/p'
+swlist -s "$HERE/$OUT" 2>/dev/null | sed -n '/HLD/p'
+
+# --- compress ------------------------------------------------------------
+# swinstall cannot read a compressed depot, so this is purely for transport
+# and storage; it is uncompressed again before installing.
+ZIP=
+for c in /usr/contrib/bin/gzip /usr/bin/gzip /opt/gnu/bin/gzip; do
+    [ -x "$c" ] && { ZIP=$c; break; }
+done
+if [ -n "$ZIP" ]; then
+    rm -f "$OUT.gz"
+    if $ZIP -9 "$OUT"; then
+        echo "compressed to $OUT.gz"
+        OUT="$OUT.gz"
+    fi
+elif [ -x /usr/bin/compress ]; then
+    rm -f "$OUT.Z"
+    if /usr/bin/compress "$OUT"; then
+        echo "compressed to $OUT.Z"
+        OUT="$OUT.Z"
+    fi
+else
+    echo "note: no compressor found, leaving the depot uncompressed"
+fi
+
 echo
-echo "install as root with:"
-echo "    swinstall -s `pwd`/$OUT HLD          # everything, ld override included"
-echo "    swinstall -s `pwd`/$OUT HLD.RUN      # linker only, system ld untouched"
+case "$OUT" in
+*.gz|*.Z)
+    echo "to install, uncompress first (swinstall reads a plain depot):"
+    case "$OUT" in
+    *.gz) echo "    $ZIP -dc $HERE/$OUT > /var/tmp/hld.depot" ;;
+    *.Z)  echo "    /usr/bin/uncompress -c $HERE/$OUT > /var/tmp/hld.depot" ;;
+    esac
+    echo "    swinstall -s /var/tmp/hld.depot HLD       # incl. the ld override"
+    echo "    swinstall -s /var/tmp/hld.depot HLD.RUN   # linker only"
+    ;;
+*)
+    echo "install as root with:"
+    echo "    swinstall -s $HERE/$OUT HLD"
+    echo "    swinstall -s $HERE/$OUT HLD.RUN"
+    ;;
+esac
