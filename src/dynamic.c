@@ -131,7 +131,7 @@ int hld_alloc_dynamic(hld_link *L)
     L->nimports = nimp;
 
     for (d = L->dsos; d; d = d->next)
-        if (d->needed) d->strx = dynstr_add(L, d->soname);
+        if (d->needed && !d->indirect) d->strx = dynstr_add(L, d->soname);
     for (h = 0; h < HLD_SYMHASH; h++)
         for (g = L->hash[h]; g; g = g->next)
             if (g->dynidx) g->strx = dynstr_add(L, g->name);
@@ -329,7 +329,8 @@ int hld_fill_dynamic(hld_link *L)
         for (l = L->dlt; l; l = l->next) {
             if (!l->g || l->g->kind != HLD_SYM_IMPORT) continue;
             reladyn_add(L, L->dltsec->addr + l->slot, l->g->dynidx,
-                        l->is_fptr ? R_IA64_FPTR64MSB : R_IA64_DIR64MSB, 0);
+                        l->kind == HLD_DLT_FPTR ? R_IA64_FPTR64MSB
+                                                : R_IA64_DIR64MSB, 0);
         }
         /* And the data words that hold another module's address. */
         for (n = 0; n < L->ndynrel; n++) {
@@ -387,7 +388,7 @@ int hld_fill_dynamic(hld_link *L)
             } \
         } while (0)
         for (d = L->dsos; d; d = d->next)
-            if (d->needed) DYN(DT_NEEDED, d->strx);
+            if (d->needed && !d->indirect) DYN(DT_NEEDED, d->strx);
         /*
          * Ask for immediate binding: hld does not emit the lazy-resolution
          * trampoline, so every import must be bound before control reaches
@@ -493,38 +494,84 @@ int hld_find_library(hld_link *L, const char *name, hld_archive **ar_out)
     char path[1024];
     size_t i;
     FILE *f;
+    int want_ar_first = (L->libmode == HLD_LIB_ARCHIVE
+                         || L->libmode == HLD_LIB_ARCHIVE_SHARED);
+    int allow_shared = (L->libmode != HLD_LIB_ARCHIVE);
+    int allow_ar = (L->libmode != HLD_LIB_SHARED);
 
     if (ar_out) *ar_out = NULL;
     for (i = 0; i < L->nlibpaths; i++) {
-        snprintf(path, sizeof path, "%s/lib%s.so", L->libpaths[i], name);
-        f = fopen(path, "rb");
-        if (f) { fclose(f); return hld_add_dso(L, path); }
-        /* HP names the C library libc.so.1 rather than libc.so */
-        snprintf(path, sizeof path, "%s/lib%s.so.1", L->libpaths[i], name);
-        f = fopen(path, "rb");
-        if (f) { fclose(f); return hld_add_dso(L, path); }
+        int try;
+        /*
+         * -a decides which kind is preferred, and whether the other kind is
+         * acceptable at all. gcc uses this for -static-libstdc++, which asks
+         * for the archive of one library in the middle of an otherwise
+         * shared link.
+         */
+        for (try = 0; try < 2; try++) {
+            int archive = want_ar_first ? (try == 0) : (try == 1);
 
-        snprintf(path, sizeof path, "%s/lib%s.a", L->libpaths[i], name);
-        f = fopen(path, "rb");
-        if (f) {
-            hld_archive *ar;
-            fclose(f);
-            if (hld_archive_open(L, path, &ar) < 0) return -1;
-            if (ar_out) *ar_out = ar;
-            return hld_archive_search(L, ar, NULL);
+            if (archive) {
+                if (!allow_ar) continue;
+                snprintf(path, sizeof path, "%s/lib%s.a", L->libpaths[i], name);
+                f = fopen(path, "rb");
+                if (f) {
+                    hld_archive *ar;
+                    fclose(f);
+                    if (hld_archive_open(L, path, &ar) < 0) return -1;
+                    if (ar_out) *ar_out = ar;
+                    return hld_archive_search(L, ar, NULL);
+                }
+            } else {
+                if (!allow_shared) continue;
+                snprintf(path, sizeof path, "%s/lib%s.so", L->libpaths[i], name);
+                f = fopen(path, "rb");
+                if (f) { fclose(f); return hld_add_dso(L, path); }
+                /* HP names the C library libc.so.1 rather than libc.so */
+                snprintf(path, sizeof path, "%s/lib%s.so.1",
+                         L->libpaths[i], name);
+                f = fopen(path, "rb");
+                if (f) { fclose(f); return hld_add_dso(L, path); }
+            }
         }
     }
     snprintf(L->err, HLD_ERRSZ, "cannot find library -l%s", name);
     return -1;
 }
 
+/*
+ * A library's own dependencies are named in its DT_NEEDED and satisfy
+ * references the same way it does — the C++ unwinder, for instance, reaches
+ * the register-context routines through libuca, which no link line mentions.
+ * They are loaded for resolution but never recorded as this image's own
+ * NEEDED: the loader follows the chain itself, which is what the platform's
+ * linker leaves it to do.
+ */
+static int add_dso(hld_link *L, const char *path, int indirect);
+
 int hld_add_dso(hld_link *L, const char *path)
+{
+    return add_dso(L, path, 0);
+}
+
+/* Already loaded, by soname or by path? */
+static int dso_loaded(hld_link *L, const char *soname)
+{
+    hld_dso *d;
+    for (d = L->dsos; d; d = d->next)
+        if (d->soname && strcmp(d->soname, soname) == 0) return 1;
+    return 0;
+}
+
+static int add_dso(hld_link *L, const char *path, int indirect)
 {
     char err[HLD_ERRSZ];
     hld_elf *e;
     hld_dso *d;
     uint32_t i;
     const char *base;
+    char needed[16][128];
+    size_t nneeded = 0;
 
     e = hld_elf_load(path, err);
     if (!e) { snprintf(L->err, HLD_ERRSZ, "%s", err); return -1; }
@@ -550,15 +597,24 @@ int hld_add_dso(hld_link *L, const char *path)
             if (dyn) {
                 for (k = 0; k < nd; k++)
                     if (dyn[k].tag == DT_STRTAB) straddr = dyn[k].val;
-                for (k = 0; k < nd; k++)
-                    if (dyn[k].tag == DT_SONAME && straddr) {
-                        const hld_shdr *st = hld_sec_by_addr(e, straddr);
-                        if (st && st->type == SHT_STRTAB) {
-                            const char *nm = hld_strtab_str(e,
-                                (uint32_t)(st - e->shdrs), dyn[k].val);
-                            if (nm && nm[0]) d->soname = nm;
-                        }
+                for (k = 0; k < nd; k++) {
+                    const hld_shdr *st;
+                    const char *nm;
+                    if (!straddr) continue;
+                    if (dyn[k].tag != DT_SONAME && dyn[k].tag != DT_NEEDED)
+                        continue;
+                    st = hld_sec_by_addr(e, straddr);
+                    if (!st || st->type != SHT_STRTAB) continue;
+                    nm = hld_strtab_str(e, (uint32_t)(st - e->shdrs),
+                                        dyn[k].val);
+                    if (!nm || !nm[0]) continue;
+                    if (dyn[k].tag == DT_SONAME) {
+                        d->soname = nm;
+                    } else if (nneeded < sizeof needed / sizeof needed[0]) {
+                        snprintf(needed[nneeded], sizeof needed[0], "%s", nm);
+                        nneeded++;
                     }
+                }
                 free(dyn);
             }
         }
@@ -586,10 +642,35 @@ int hld_add_dso(hld_link *L, const char *path)
         }
     }
 
+    d->indirect = indirect;
     if (!L->dsos) { L->dsos = d; L->dso_tail = &d->next; }
     else { *L->dso_tail = d; L->dso_tail = &d->next; }
     L->ndsos++;
     L->dynamic = 1;                     /* using a library implies dynamic */
+
+    /* Its own dependencies, so what they define can satisfy this link too. */
+    {
+        size_t k;
+        for (k = 0; k < nneeded; k++) {
+            char p2[1024];
+            size_t li;
+            FILE *f;
+            if (dso_loaded(L, needed[k])) continue;
+            for (li = 0; li < L->nlibpaths; li++) {
+                size_t dl = strlen(L->libpaths[li]);
+                if (dl + strlen(needed[k]) + 2 > sizeof p2) continue;
+                memcpy(p2, L->libpaths[li], dl);
+                p2[dl] = '/';
+                strcpy(p2 + dl + 1, needed[k]);
+                f = fopen(p2, "rb");
+                if (f) {
+                    fclose(f);
+                    if (add_dso(L, p2, 1) < 0) return -1;
+                    break;
+                }
+            }
+        }
+    }
 
     /*
      * Bind what is undefined right now, at this library's position on the

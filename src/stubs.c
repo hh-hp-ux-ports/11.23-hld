@@ -5,8 +5,8 @@
  * so +-16 MB from the call. Beyond that the call cannot be encoded at all,
  * and the linker has to route it through a stub near the caller that makes
  * the jump with a wider branch. Text over 16 MB is not exotic — a large C++
- * compiler binary is more than twice that — and mis-handling this is one of
- * the defects hld exists to fix, so the reach is checked for every call
+ * compiler binary is more than twice that — and mishandling this is one of
+ * the defects hld exists to fix, so the reach of every call is checked
  * rather than assumed.
  *
  * The stub is one MLX bundle holding `brl.cond.sptk.many <target>`: a 60-bit
@@ -15,18 +15,19 @@
  * caller's and the target returns straight there. (brl is an Itanium 2
  * instruction; every machine that runs this ABI has it.)
  *
- * Stubs live in islands *inside* .text rather than in one section at the end,
- * because a single trailing section is itself unreachable from the front of a
- * large text. An island is placed at the head of every zone of text, and a
- * call takes the island in its own zone: at most one zone away, hence always
- * in range. The zone is deliberately well under the branch's reach, so the
- * address movement caused by inserting the islands cannot invalidate the
- * choice.
+ * The stubs are grouped into islands spread through the executable sections,
+ * rather than gathered into one section at the end, which would itself be
+ * out of reach from the front of a large text. Islands are sections of their
+ * own, inserted between the code sections at intervals well under a branch's
+ * reach — code is not all in .text: a C++ compiler emits thousands of
+ * one-function .gnu.linkonce.t.* sections, and a call from any of them may
+ * need a stub too. A call takes the island nearest to it, so it is always
+ * less than one interval away.
  *
- * Sizing has to happen before addresses are final, and inserting stubs moves
- * the addresses that decide which calls need them, so this runs to a
- * fixpoint: scan, insert, lay out again, rescan until a pass adds nothing.
- * Each pass only adds, so it terminates.
+ * Sizing has to happen before addresses are final, and inserting the islands
+ * moves the addresses that decide which calls need them, so this runs to a
+ * fixpoint: place, lay out, scan, repeat until a pass adds nothing. Each
+ * pass only adds, so it settles — twice through, in practice.
  */
 #include "port.h"
 
@@ -38,11 +39,6 @@
 #include "ia64_patch.h"
 
 #define U(x) ((unsigned long long)(x))
-
-static uint64_t align_up(uint64_t v, uint64_t a)
-{
-    return (a < 2) ? v : ((v + a - 1) & ~(a - 1));
-}
 
 /*
  * One MLX bundle: nop.m, then brl.cond.sptk.many with a zero displacement,
@@ -59,11 +55,11 @@ static const uint8_t hld_brl_stub[HLD_STUB_BUNDLE] = {
 };
 
 /*
- * How much text one island serves. A call reaches back at most this far, so
- * it must stay below the 16 MB a PCREL21B can encode; the margin absorbs the
- * shift caused by inserting the islands themselves.
+ * How much code one island serves. A call reaches the nearest island, so
+ * this has to stay below the 16 MB a direct branch can encode; the margin
+ * absorbs both the stubs' own size and the movement they cause.
  */
-#define ZONE_SIZE  (12ULL * 1024 * 1024)
+#define ZONE_SIZE  (8ULL * 1024 * 1024)
 
 /* Displacement a direct call can encode: 21 bits, bundle-granular, signed. */
 #define BRANCH_REACH (1ULL << 24)          /* 2^20 bundles * 16 bytes */
@@ -75,57 +71,149 @@ int hld_branch_in_range(uint64_t from, uint64_t to)
         && (int64_t)d < (int64_t)BRANCH_REACH;
 }
 
+static int is_code(const osec *o)
+{
+    return (o->flags & SHF_ALLOC) && (o->flags & SHF_EXECINSTR)
+        && o->type != SHT_NOBITS;
+}
+
 /* ---- islands ----------------------------------------------------------- */
 
-static stubisl *island_for(hld_link *L, uint64_t zone)
+static uint64_t align_up(uint64_t v, uint64_t a)
 {
-    stubisl *is;
+    return (a < 2) ? v : ((v + a - 1) & ~(a - 1));
+}
 
-    for (is = L->islands; is; is = is->next)
-        if (is->zone == zone) return is;
+static uint64_t run_size(const isec *in)
+{
+    if (in->island) return in->island->size;
+    return in->sh ? in->sh->size : 0;
+}
 
-    is = calloc(1, sizeof *is);
-    if (!is) return NULL;
-    is->zone = zone;
-    /* keep the list ordered by zone; the rebuild walks it in place order */
-    {
-        stubisl **pp = &L->islands;
-        while (*pp && (*pp)->zone < zone) pp = &(*pp)->next;
-        is->next = *pp;
-        *pp = is;
-    }
-    return is;
+static uint64_t run_align(const isec *in)
+{
+    if (in->island) return 16;
+    return (in->sh && in->sh->addralign) ? in->sh->addralign : 1;
+}
+
+static uint64_t island_addr(const stubisl *is)
+{
+    return is->at->out->addr + is->at->out_off;
 }
 
 /*
- * The stub a call at `from` must use to reach `g`/`in`+`off`. Both the
- * allocation pass and relocation ask this, so they cannot disagree.
+ * Offsets within an output section, once an island has been put in it. A
+ * section hld generated itself — the import stubs — has no contributions and
+ * its size is not derived from any; recomputing it from nothing would erase
+ * it, and every import call would then point past the end of the image.
  */
+static void relayout(osec *o)
+{
+    isec *in;
+    uint64_t pos = 0;
+
+    if (!o->first) return;
+    for (in = o->first; in; in = in->next) {
+        pos = align_up(pos, run_align(in));
+        in->out_off = pos;
+        pos += run_size(in);
+    }
+    o->size = pos;
+}
+
+static void relayout_code(hld_link *L)
+{
+    osec *o;
+    for (o = L->osecs; o; o = o->next)
+        if (is_code(o)) relayout(o);
+}
+
+/*
+ * Put islands in so that no stretch of code longer than a zone is without
+ * one. They go between the contributions making up the code sections, which
+ * is the only placement that works both for a compiler emitting thousands of
+ * one-function sections and for a single large one. Called before every
+ * layout; it only adds, and does nothing once the spacing holds.
+ */
+static int place_islands(hld_link *L)
+{
+    osec *o;
+    uint64_t since = 0;
+    int first = 1, added = 0;
+
+    for (o = L->osecs; o; o = o->next) {
+        isec *in, *prev = NULL;
+
+        if (!is_code(o)) continue;
+        if (!o->first) { since += o->size; continue; }   /* generated, opaque */
+        for (in = o->first; in; prev = in, in = in->next) {
+            if (in->island) { since = 0; first = 0; continue; }
+            if (first || since + run_size(in) > ZONE_SIZE) {
+                stubisl *is = calloc(1, sizeof *is);
+                isec *run = calloc(1, sizeof *run);
+
+                if (!is || !run) { free(is); free(run); return -1; }
+                run->out = o;
+                run->island = is;
+                is->at = run;
+
+                run->next = in;               /* splice ahead of this run */
+                if (prev) prev->next = run;
+                else o->first = run;
+
+                {                             /* islands in address order */
+                    stubisl **pp = &L->islands;
+                    while (*pp) pp = &(*pp)->next;
+                    *pp = is;
+                }
+                L->nislands++;
+                prev = run;
+                since = 0;
+                first = 0;
+                added = 1;
+            }
+            since += run_size(in);
+        }
+    }
+    if (added) relayout_code(L);
+    return added;
+}
+
+/*
+ * The island nearest an address. Both the allocation pass and relocation ask
+ * this, so they cannot disagree about which stub a call belongs to.
+ */
+static stubisl *nearest_island(hld_link *L, uint64_t from)
+{
+    stubisl *is, *best = NULL;
+    uint64_t bestd = 0;
+
+    for (is = L->islands; is; is = is->next) {
+        uint64_t a = island_addr(is);
+        uint64_t d = a > from ? a - from : from - a;
+        if (!best || d < bestd) { best = is; bestd = d; }
+    }
+    return best;
+}
+
 stubent *hld_stub_find(hld_link *L, uint64_t from, hld_gsym *g, isec *in,
                        uint64_t off)
 {
-    uint64_t zone;
-    stubisl *is;
+    stubisl *is = nearest_island(L, from);
     stubent *s;
 
-    if (from < L->text_addr) return NULL;
-    zone = (from - L->text_addr) / ZONE_SIZE;
-    for (is = L->islands; is; is = is->next) {
-        if (is->zone != zone) continue;
-        for (s = is->stubs; s; s = s->next)
-            if (s->g == g && s->in == in && s->off == off)
-                return s;
-        return NULL;
-    }
+    if (!is) return NULL;
+    for (s = is->stubs; s; s = s->next)
+        if (s->g == g && s->in == in && s->off == off)
+            return s;
     return NULL;
 }
 
 static int stub_add(hld_link *L, uint64_t from, hld_gsym *g, isec *in,
                     uint64_t off)
 {
-    uint64_t zone = (from - L->text_addr) / ZONE_SIZE;
-    stubisl *is = island_for(L, zone);
-    stubent *s;
+    stubisl *is = nearest_island(L, from);
+    stubent *s, **pp;
 
     if (!is) return -1;
     s = calloc(1, sizeof *s);
@@ -136,56 +224,17 @@ static int stub_add(hld_link *L, uint64_t from, hld_gsym *g, isec *in,
     s->slot = is->size;
     s->isl = is;
     is->size += HLD_STUB_BUNDLE;
-    {                                     /* append, so slots stay ordered */
-        stubent **pp = &is->stubs;
-        while (*pp) pp = &(*pp)->next;
-        *pp = s;
-    }
+    for (pp = &is->stubs; *pp; pp = &(*pp)->next)
+        ;
+    *pp = s;
     L->nstubs++;
     return 0;
 }
 
-/*
- * Re-lay the text section with the islands in place. Offsets within an
- * output section are otherwise assigned as inputs arrive; here they are
- * recomputed from scratch, inserting each island at the head of its zone.
- */
-static void place_islands(hld_link *L)
+uint64_t hld_stub_addr(hld_link *L, const stubent *s)
 {
-    osec *o = L->textsec;
-    stubisl *is;
-    isec *in;
-    uint64_t pos = 0;
-
-    if (!o) return;
-    is = L->islands;
-    for (in = o->first; in; in = in->next) {
-        uint64_t align = (in->sh && in->sh->addralign) ? in->sh->addralign : 1;
-        uint64_t sz = in->sh ? in->sh->size : 0;
-
-        /*
-         * Islands go in before the first input section that starts at or
-         * past the zone boundary, so every call in the zone has one behind
-         * it. Several can land in the same gap if a single input section
-         * spans more than one zone.
-         */
-        while (is && pos >= is->zone * ZONE_SIZE) {
-            pos = align_up(pos, 16);
-            is->out_off = pos;
-            pos += is->size;
-            is = is->next;
-        }
-        pos = align_up(pos, align);
-        in->out_off = pos;
-        pos += sz;
-    }
-    while (is) {                          /* any island past the last input */
-        pos = align_up(pos, 16);
-        is->out_off = pos;
-        pos += is->size;
-        is = is->next;
-    }
-    o->size = pos;
+    (void)L;
+    return island_addr(s->isl) + s->slot;
 }
 
 /* ---- the scan ---------------------------------------------------------- */
@@ -214,7 +263,7 @@ static long scan(hld_link *L)
             if (rsh->info == 0 || rsh->info >= e->eh.shnum) continue;
             if (!(e->shdrs[rsh->info].flags & SHF_ALLOC)) continue;
             site = hld_isec_of(L, e, rsh->info);
-            if (!site || site->out != L->textsec) continue;
+            if (!site || !is_code(site->out)) continue;
             if (rsh->link >= e->eh.shnum) continue;
 
             rel = hld_read_relas(e, rsh, &nrel, err);
@@ -272,18 +321,27 @@ static long scan(hld_link *L)
 
 int hld_alloc_stubs(hld_link *L)
 {
+    osec *o;
+    uint64_t code = 0;
     int pass;
 
-    L->textsec = osec_find_pub(L, ".text");
-    if (!L->textsec) return 0;
-    /* Nothing can be out of reach until the text itself is bigger than one. */
-    if (L->textsec->size < BRANCH_REACH) return 0;
+    for (o = L->osecs; o; o = o->next)
+        if (is_code(o)) code += o->size;
+    /* Nothing can be out of reach until there is more code than the reach. */
+    if (code < BRANCH_REACH) return 0;
 
     for (pass = 0; pass < 8; pass++) {
-        long added = scan(L);
+        long added;
+
+        if (place_islands(L) < 0) {
+            snprintf(L->err, HLD_ERRSZ, "out of memory");
+            return -1;
+        }
+        if (hld_layout(L) < 0) return -1;
+        added = scan(L);
         if (added < 0) return -1;
         if (added == 0) return 0;
-        place_islands(L);
+        relayout_code(L);                    /* the islands just grew */
         if (hld_layout(L) < 0) return -1;
     }
     snprintf(L->err, HLD_ERRSZ,
@@ -292,27 +350,21 @@ int hld_alloc_stubs(hld_link *L)
     return -1;
 }
 
-uint64_t hld_stub_addr(hld_link *L, const stubent *s)
-{
-    return L->textsec->addr + s->isl->out_off + s->slot;
-}
-
 /* Write the stub bundles, once every address is final. */
 int hld_write_stubs(hld_link *L)
 {
     stubisl *is;
     stubent *s;
 
-    if (!L->textsec || !L->textsec->data) return 0;
-
-    for (is = L->islands; is; is = is->next)
+    for (is = L->islands; is; is = is->next) {
+        if (!is->at->out->data) continue;
         for (s = is->stubs; s; s = s->next) {
             uint64_t at = hld_stub_addr(L, s);
             uint64_t to = s->g ? s->g->value + s->off
                                : (s->in ? s->in->out->addr + s->in->out_off
                                           + s->off
                                         : s->off);
-            uint8_t *p = L->textsec->data + is->out_off + s->slot;
+            uint8_t *p = is->at->out->data + is->at->out_off + s->slot;
 
             memcpy(p, hld_brl_stub, HLD_STUB_BUNDLE);
             if (hld_ia64_install_value(p, 1, to - at, R_IA64_PCREL60B)
@@ -323,6 +375,7 @@ int hld_write_stubs(hld_link *L)
                 return -1;
             }
         }
+    }
     return 0;
 }
 
@@ -334,7 +387,7 @@ void hld_free_stubs(hld_link *L)
         stubent *s, *sn;
         isn = is->next;
         for (s = is->stubs; s; s = sn) { sn = s->next; free(s); }
-        free(is);
+        free(is);   /* the run itself is freed with its output section */
     }
     L->islands = NULL;
 }

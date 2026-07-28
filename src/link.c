@@ -817,21 +817,21 @@ static unsigned lnk_hash(hld_gsym *g, isec *in, uint64_t off)
 
 static lnkent *lnk_get(hld_link *L, lnkent **hash, lnkent ***tail,
                        lnkent **head, uint64_t *count, uint64_t entsize,
-                       hld_gsym *g, isec *in, uint64_t off, int is_fptr)
+                       hld_gsym *g, isec *in, uint64_t off, int kind)
 {
     unsigned h = lnk_hash(g, in, off);
     lnkent *l;
 
     (void)L;
     for (l = hash[h]; l; l = l->hnext)
-        if (l->g == g && l->in == in && l->off == off && l->is_fptr == is_fptr)
+        if (l->g == g && l->in == in && l->off == off && l->kind == kind)
             return l;
     l = calloc(1, sizeof *l);
     if (!l) return NULL;
     l->g = g;
     l->in = in;
     l->off = off;
-    l->is_fptr = is_fptr;
+    l->kind = kind;
     l->slot = *count * entsize;
     (*count)++;
     l->hnext = hash[h];
@@ -842,10 +842,10 @@ static lnkent *lnk_get(hld_link *L, lnkent **hash, lnkent ***tail,
 }
 
 static lnkent *dlt_get(hld_link *L, hld_gsym *g, isec *in, uint64_t off,
-                       int is_fptr)
+                       int kind)
 {
     return lnk_get(L, L->dlt_hash, &L->dlt_tail, &L->dlt, &L->ndlt, 8,
-                   g, in, off, is_fptr);
+                   g, in, off, kind);
 }
 
 static lnkent *opd_get(hld_link *L, hld_gsym *g, isec *in, uint64_t off)
@@ -962,6 +962,7 @@ int hld_alloc_linkage(hld_link *L)
                 uint64_t off;
                 const char *nm;
                 int want_dlt = 0, want_opd = 0, want_pltoff = 0, want_dyn = 0;
+                int dlt_kind = HLD_DLT_PLAIN;
                 uint32_t dtype;
 
                 switch (r->type) {
@@ -969,6 +970,16 @@ int hld_alloc_linkage(hld_link *L)
                 case R_IA64_LTOFF22X:
                 case R_IA64_LTOFF64I:
                     want_dlt = 1;
+                    break;
+                /*
+                 * Thread-local, reached through the table: the slot holds the
+                 * variable's offset from the thread pointer rather than its
+                 * address. In an executable that offset is settled here, so
+                 * no help from the loader is needed.
+                 */
+                case R_IA64_LTOFF_TPREL22:
+                    want_dlt = 1;
+                    dlt_kind = HLD_DLT_TPREL;
                     break;
                 case R_IA64_LTOFF_FPTR22:
                 case R_IA64_LTOFF_FPTR64I:
@@ -1009,8 +1020,16 @@ int hld_alloc_linkage(hld_link *L)
                     /* The other module owns the descriptor; don't make one. */
                     continue;
                 }
+                if (want_opd) dlt_kind = HLD_DLT_FPTR;
+                if (dlt_kind == HLD_DLT_TPREL && g
+                    && g->kind == HLD_SYM_IMPORT) {
+                    lerr(L, "thread-local `%s' is defined in a shared library;"
+                            " hld cannot resolve that yet", nm, NULL);
+                    free(syms); free(rel);
+                    return -1;
+                }
                 if (want_opd && !opd_get(L, g, in, off)) goto oom;
-                if (want_dlt && !dlt_get(L, g, in, off, want_opd)) goto oom;
+                if (want_dlt && !dlt_get(L, g, in, off, dlt_kind)) goto oom;
                 /*
                  * An imported function already has a descriptor in .plt for
                  * the loader to fill; only a local target needs one made here.
@@ -1117,10 +1136,12 @@ int hld_build_contents(hld_link *L)
                  * because only the loader can make the canonical descriptor
                  * for a function it owns.
                  */
-                v = l->is_fptr ? 0 : l->g->hint;
-            } else if (l->is_fptr) {
+                v = l->kind == HLD_DLT_FPTR ? 0 : l->g->hint;
+            } else if (l->kind == HLD_DLT_FPTR) {
                 lnkent *d = opd_find(L, l->g, l->in, l->off);
                 v = d ? L->opdsec->addr + d->slot : 0;
+            } else if (l->kind == HLD_DLT_TPREL) {
+                v = target_addr(l->g, l->in, l->off) - L->tls_base;
             } else {
                 v = target_addr(l->g, l->in, l->off);
             }
@@ -1216,10 +1237,16 @@ int hld_relocate(hld_link *L)
                     break;
 
                 /* DLT (GOT) access: the gp-relative offset of the slot. */
+                case R_IA64_LTOFF_TPREL22:
+                    ent = dlt_get(L, tg, tin, toff, HLD_DLT_TPREL);
+                    if (!ent) { lerr(L, "out of memory", NULL, NULL); goto rfail; }
+                    V = L->dltsec->addr + ent->slot - L->gp;
+                    break;
+
                 case R_IA64_LTOFF22:
                 case R_IA64_LTOFF22X:
                 case R_IA64_LTOFF64I:
-                    ent = dlt_get(L, tg, tin, toff, 0);
+                    ent = dlt_get(L, tg, tin, toff, HLD_DLT_PLAIN);
                     if (!ent) { lerr(L, "out of memory", NULL, NULL); goto rfail; }
                     V = L->dltsec->addr + ent->slot - L->gp;
                     break;
@@ -1231,7 +1258,7 @@ int hld_relocate(hld_link *L)
                 case R_IA64_LTOFF_FPTR32LSB:
                 case R_IA64_LTOFF_FPTR64MSB:
                 case R_IA64_LTOFF_FPTR64LSB:
-                    ent = dlt_get(L, tg, tin, toff, 1);
+                    ent = dlt_get(L, tg, tin, toff, HLD_DLT_FPTR);
                     if (!ent) { lerr(L, "out of memory", NULL, NULL); goto rfail; }
                     V = L->dltsec->addr + ent->slot - L->gp;
                     break;

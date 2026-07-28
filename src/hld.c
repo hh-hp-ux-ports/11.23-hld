@@ -27,6 +27,8 @@ static void usage(void)
         "  -u SYM       treat SYM as undefined, so archives are searched for it\n"
         "  -L DIR       add a library search directory\n"
         "  -l NAME      link libNAME.so, libNAME.so.1 or libNAME.a\n"
+        "  -a MODE      what -l looks for: archive, shared, archive_shared,\n"
+        "               shared_archive or default\n"
         "  --start-group ... --end-group   re-search these archives until\n"
         "               nothing further is pulled in\n"
         "  -V           print version\n"
@@ -122,6 +124,25 @@ int main(int argc, char **argv)
                 }
             } while (changed);
             ngroup = 0;
+            continue;
+        }
+        /*
+         * -a chooses what -l looks for from here on. gcc brackets a single
+         * library with -aarchive_shared ... -adefault for -static-libstdc++,
+         * so honouring it is what makes a statically linked C++ runtime come
+         * out static.
+         */
+        if (a[0] == '-' && a[1] == 'a' && a[2]) {
+            const char *m = a + 2;
+            if (strcmp(m, "archive") == 0)              L.libmode = HLD_LIB_ARCHIVE;
+            else if (strcmp(m, "shared") == 0)          L.libmode = HLD_LIB_SHARED;
+            else if (strcmp(m, "archive_shared") == 0)  L.libmode = HLD_LIB_ARCHIVE_SHARED;
+            else if (strcmp(m, "shared_archive") == 0
+                     || strcmp(m, "default") == 0)      L.libmode = HLD_LIB_DEFAULT;
+            else {
+                fprintf(stderr, "hld: unknown library mode `-a%s'\n", m);
+                return 1;
+            }
             continue;
         }
         if (a[0] == '-' && a[1] == 'l') {

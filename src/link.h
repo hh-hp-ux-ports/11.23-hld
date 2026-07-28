@@ -18,9 +18,10 @@ struct osec;
 typedef struct isec {
     hld_elf *obj;
     uint32_t idx;             /* section index within obj */
-    const hld_shdr *sh;
+    const hld_shdr *sh;       /* NULL for a run of bytes hld generated */
     uint64_t out_off;         /* offset within the output section */
     struct osec *out;
+    struct stubisl *island;   /* set when this is a stub island */
     struct isec *next;        /* next contribution to the same output section */
 } isec;
 
@@ -46,6 +47,7 @@ typedef struct hld_dso {
     const char *soname;       /* DT_SONAME, or the file's basename */
     dsosym *hash[1021];
     int needed;               /* something actually resolved to it */
+    int indirect;             /* pulled in as another library's dependency */
     uint32_t strx;            /* soname offset in .dynstr */
     struct hld_dso *next;
 } hld_dso;
@@ -113,11 +115,16 @@ typedef struct hld_archive {
  * {code address, gp} pairs) are keyed the same way — by the target the
  * relocation names, plus an addend.
  */
+/* What a DLT slot holds. */
+#define HLD_DLT_PLAIN 0           /* the target's address */
+#define HLD_DLT_FPTR  1           /* the address of its descriptor */
+#define HLD_DLT_TPREL 2           /* its offset from the thread pointer */
+
 typedef struct lnkent {
     struct hld_gsym *g;       /* global target, or NULL for a local one */
     struct isec *in;          /* local target's input section */
     uint64_t off;             /* addend (global) or offset within `in` */
-    int is_fptr;              /* DLT only: slot holds a descriptor's address */
+    int kind;                 /* DLT only: what the slot holds */
     uint64_t slot;            /* byte offset within the DLT / .opd */
     struct lnkent *hnext;     /* hash chain */
     struct lnkent *next;      /* allocation order, for filling contents */
@@ -141,8 +148,7 @@ typedef struct stubent {
 } stubent;
 
 typedef struct stubisl {
-    uint64_t zone;            /* which stretch of text this island serves */
-    uint64_t out_off;         /* where it sits in the text section */
+    struct isec *at;          /* the run of bytes it occupies */
     uint64_t size;
     stubent *stubs;
     struct stubisl *next;
@@ -161,6 +167,18 @@ typedef struct dynrel {
     uint64_t addend;          /* added to the symbol's address */
     uint32_t type;            /* R_IA64_DIR64MSB or R_IA64_FPTR64MSB */
 } dynrel;
+
+/*
+ * Which kind of library -l looks for, set by HP's -a option. gcc emits it
+ * around a single -l to pull that one library out of an archive while the
+ * rest of the link stays shared.
+ */
+typedef enum {
+    HLD_LIB_DEFAULT,          /* shared first, then archive */
+    HLD_LIB_ARCHIVE,          /* archives only */
+    HLD_LIB_SHARED,           /* shared libraries only */
+    HLD_LIB_ARCHIVE_SHARED    /* archive first, then shared */
+} hld_libmode;
 
 typedef struct {
     /* inputs */
@@ -198,6 +216,8 @@ typedef struct {
     uint64_t entry;
     uint64_t gp;
 
+    hld_libmode libmode;      /* what -l looks for, per HP's -a */
+
     /* archives, in command-line order */
     hld_archive *archives, **ar_tail;
     size_t narchives;
@@ -209,9 +229,8 @@ typedef struct {
     uint64_t ndltrel;         /* DLT slots the loader has to fill */
     dynrel *dynrels;          /* data words naming another module's symbol */
     size_t ndynrel, dynrel_cap;
-    stubisl *islands;         /* long-branch stubs, laid into the text */
-    uint64_t nstubs;
-    osec *textsec;
+    stubisl *islands;         /* long-branch stubs, spread through the code */
+    uint64_t nstubs, nislands;
     uint64_t nreladyn;        /* entries written to .rela.dyn so far */
     osec *pltsec, *reladynsec, *stubsec;
     char **libpaths;
