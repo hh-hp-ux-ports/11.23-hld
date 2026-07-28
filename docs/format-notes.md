@@ -174,6 +174,34 @@ reject the image ("not a valid load module"); advertising it once through
 (`{entry point, gp}`) rather than left zero, and imported symbols are marked
 weak.
 
+### Addresses that belong to another module
+
+A reference to a shared library is not always a call. A linkage-table slot can
+hold the address of imported *data*, and a data word can hold such an address
+outright — C++ start-up does both, reaching the C library's `__iob` (the `FILE`
+table behind `stdout`), `__SB_masks` and `errno` that way. Neither address
+exists at link time, so each needs a dynamic relocation for the loader to apply:
+
+| what holds the address | relocation |
+|---|---|
+| linkage-table slot naming imported data | `R_IA64_DIR64MSB` |
+| linkage-table slot naming an imported function | `R_IA64_FPTR64MSB` |
+| data word holding an imported address | `R_IA64_DIR64MSB` |
+| import descriptor in `.plt` | `R_IA64_IPLTMSB` |
+
+`FPTR64` asks the loader for the *canonical* descriptor: the entry point and the
+gp both belong to the defining module, so the linker cannot construct one.
+
+The platform's linker keeps these in per-target sections (`.rela.dlt`,
+`.rela.sdata`, `.rela.init_array`, …) laid out contiguously, and pre-fills a
+plain-address slot with the link-time binding while leaving a descriptor slot
+zero. hld emits a single `.rela.dyn` instead, which the loader sees identically
+because it reads the array through `DT_RELA`.
+
+Getting this wrong is quiet: the slot or word keeps whatever the linker left
+there, and the program faults inside the runtime's own start-up rather than at
+the reference that was mis-resolved.
+
 ### Calling an imported function
 
 The compiler emits a plain `R_IA64_PCREL21B` direct call to the external

@@ -81,9 +81,11 @@ absent.
 Early, but it links real programs and they run.
 
 **A compiled C program that calls `printf`, linked by hld against the system C
-library, prints correctly and exits cleanly on HP-UX 11.23/Itanium.** Static
-executables work too, and hld builds and runs natively on 11.23 — with GNU tools
-or with the vendor compiler alone.
+library, prints correctly and exits cleanly on HP-UX 11.23/Itanium** — and so
+does a C++ program that runs its static constructors, throws an exception
+through a frame with a destructor, and catches it. Static executables work too,
+and hld builds and runs natively on 11.23 — with GNU tools or with the vendor
+compiler alone. gcc drives it directly through `-B`.
 
 Working today:
 
@@ -96,13 +98,17 @@ Working today:
   and function pointers work.
 - Static and dynamic `ET_EXEC` output: the loader handshake, shared libraries as
   input, imports through `.plt` descriptors with generated call stubs, exported
-  dynamic symbols, and `DT_NEEDED`.
+  dynamic symbols, `DT_NEEDED`, and the dynamic relocations that let the loader
+  fill in an address belonging to another module.
+- Archives (`.a`), searched in command-line order, with `--start-group`; objects
+  and archives from the vendor compiler as well as from gcc.
+- Thread-local storage, initializer and finalizer arrays, and one merged, sorted
+  unwind table with its header and segment — enough for C++ exceptions.
 
-Not there yet: archives (`.a`), shared-library *output*, unwind-table merging
-across objects, long-branch stubs for text beyond a branch's reach (the defect
-that blocks the large compiler binaries this project is aimed at), TLS, and
-debug-section handling. Anything hld cannot do yet is refused with a clear
-message rather than mis-linked.
+Not there yet: shared-library *output*, long-branch stubs for text beyond a
+branch's reach (the defect that blocks the large compiler binaries this project
+is aimed at), and debug-section handling. An input hld cannot handle is refused
+with a clear message rather than mis-linked.
 
 ## License
 

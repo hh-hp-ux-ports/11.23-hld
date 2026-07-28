@@ -82,9 +82,9 @@ swremove HLD            # remove everything
 ```
 
 ⚠️ hld is not yet a complete replacement for the system linker — it cannot
-link archives or produce shared libraries, among other gaps listed in the
-README. Installing `HLD.LDOVR` on a machine that builds other software will
-break those builds. Prefer `HLD.RUN` plus `-B` until hld covers what you need.
+produce shared libraries, among other gaps listed in the README. Installing
+`HLD.LDOVR` on a machine that builds other software will break those builds.
+Prefer `HLD.RUN` plus `-B` until hld covers what you need.
 
 ## Source, and the licence
 
