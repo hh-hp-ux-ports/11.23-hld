@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #include "link.h"
 
@@ -347,6 +349,12 @@ int hld_write_exec(hld_link *L)
         goto done;
     }
     fclose(f);
+    /* A linked program has to be runnable; honor the umask like any tool. */
+    if (chmod(L->out_path, 0755) != 0) {
+        snprintf(L->err, HLD_ERRSZ, "%s: cannot make the output executable",
+                 L->out_path);
+        goto done;
+    }
     rc = 0;
     goto done;
 

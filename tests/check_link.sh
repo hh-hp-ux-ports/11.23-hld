@@ -1,10 +1,9 @@
 #!/bin/sh
 # Static-link tests: hld must produce a structurally valid LP64 ET_EXEC.
 #
-# Structure is checked here on any host. Whether the result actually RUNS can
-# only be settled on HP-UX/Itanium hardware:
-#     sh tests/check_link.sh && <copy build/linktest/exit42 to an 11.23 box>
-# The expected exit status is 42.
+# Structure is checked on any host; on HP-UX/Itanium the linked programs are
+# also executed, since that is the only place the answer is real. Each is
+# expected to exit 42.
 #
 # POSIX sh — must also run on HP-UX (HP grep: plain BRE only).
 
@@ -114,12 +113,24 @@ if [ -n "$doff" ]; then
     fi
 fi
 
+# On the target platform, run them: structure is only half the claim.
+if [ "`uname -s 2>/dev/null`" = "HP-UX" ] && [ "`uname -m 2>/dev/null`" = "ia64" ]; then
+    for t in exit42 multi gptest; do
+        CHECKS=`expr $CHECKS + 1`
+        $W/$t
+        rc=$?
+        if [ $rc -ne 42 ]; then
+            echo "FAIL: $t exited $rc, expected 42"
+            FAIL=1
+        fi
+    done
+    ran="and ran"
+else
+    ran="(not run: needs HP-UX/ia64)"
+fi
+
 if [ $FAIL -eq 0 ]; then
-    echo "OK: static link checks passed ($CHECKS checks)"
-    echo "    on HP-UX/Itanium these should all exit 42:"
-    echo "      $W/exit42   (single object, syscall gateway)"
-    echo "      $W/multi    (cross-object calls)"
-    echo "      $W/gptest   (gp-relative short data)"
+    echo "OK: static link checks passed ($CHECKS checks) $ran"
 else
     echo "FAILURES present ($CHECKS checks)"
 fi

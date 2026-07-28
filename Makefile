@@ -29,6 +29,7 @@ check: $(TOOLS)
 	sh tests/check_readelf.sh
 	sh tests/check_patch.sh
 	sh tests/check_link.sh
+	sh tests/check_dynamic.sh
 
 clean:
 	rm -rf $(BUILD)
