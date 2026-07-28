@@ -216,7 +216,7 @@ static hld_gsym *sym_intern(hld_link *L, const char *name)
 }
 
 /* Find the input-section record for (obj, shndx). */
-static isec *isec_of(hld_link *L, hld_elf *obj, uint32_t shndx)
+isec *hld_isec_of(hld_link *L, hld_elf *obj, uint32_t shndx)
 {
     osec *o;
     isec *in;
@@ -287,7 +287,7 @@ static int resolve_symbols_of(hld_link *L, hld_elf *e)
                     g->kind = HLD_SYM_ABS;
                     g->value = s->value;
                 } else {
-                    isec *in = isec_of(L, e, s->shndx);
+                    isec *in = hld_isec_of(L, e, s->shndx);
                     if (!in) continue;   /* defined in a non-alloc section */
                     g->kind = HLD_SYM_DEFINED;
                     g->in = in;
@@ -750,7 +750,7 @@ int hld_layout(hld_link *L)
  * an offset. This runs both before layout (to allocate linkage-table slots)
  * and after it (to compute values), so it must not depend on addresses.
  */
-static int reloc_target(hld_link *L, hld_elf *e, hld_sym *syms, size_t nsyms,
+int hld_reloc_target(hld_link *L, hld_elf *e, hld_sym *syms, size_t nsyms,
                         const hld_rela *r, hld_gsym **gp_out, isec **in_out,
                         uint64_t *off_out, const char **name)
 {
@@ -788,7 +788,7 @@ static int reloc_target(hld_link *L, hld_elf *e, hld_sym *syms, size_t nsyms,
         lerr(L, "%s: bad section index in symbol", e->path, NULL);
         return -1;
     }
-    in = isec_of(L, e, s->shndx);
+    in = hld_isec_of(L, e, s->shndx);
     if (!in) {
         lerr(L, "%s: relocation against non-allocated section `%s'",
              e->path, e->shdrs[s->shndx].name);
@@ -942,7 +942,7 @@ int hld_alloc_linkage(hld_link *L)
             if (rsh->type != SHT_RELA) continue;
             if (rsh->info == 0 || rsh->info >= e->eh.shnum) continue;
             if (!(e->shdrs[rsh->info].flags & SHF_ALLOC)) continue;
-            site = isec_of(L, e, rsh->info);
+            site = hld_isec_of(L, e, rsh->info);
             if (!site) continue;
             if (rsh->link >= e->eh.shnum) continue;
 
@@ -1000,7 +1000,7 @@ int hld_alloc_linkage(hld_link *L)
                 default:
                     continue;
                 }
-                if (reloc_target(L, e, syms, nsyms, r, &g, &in, &off, &nm) < 0) {
+                if (hld_reloc_target(L, e, syms, nsyms, r, &g, &in, &off, &nm) < 0) {
                     free(syms); free(rel);
                     return -1;
                 }
@@ -1151,7 +1151,7 @@ int hld_relocate(hld_link *L)
             tsh = &e->shdrs[rsh->info];
             if (!(tsh->flags & SHF_ALLOC)) continue;   /* e.g. .rela.debug_* */
 
-            in = isec_of(L, e, rsh->info);
+            in = hld_isec_of(L, e, rsh->info);
             if (!in || !in->out->data) continue;
 
             rel = hld_read_relas(e, rsh, &nrel, err);
@@ -1182,7 +1182,7 @@ int hld_relocate(hld_link *L)
                 hld_patch_status st;
                 uint32_t dyntype;
 
-                if (reloc_target(L, e, syms, nsyms, r, &tg, &tin, &toff,
+                if (hld_reloc_target(L, e, syms, nsyms, r, &tg, &tin, &toff,
                                  &sname) < 0) {
                     free(syms); free(rel);
                     return -1;
@@ -1310,6 +1310,24 @@ int hld_relocate(hld_link *L)
                     break;
 
                 case R_IA64_PCREL21B:
+                    /*
+                     * A direct call reaches +-16 MB. Past that the call is
+                     * sent to a stub placed near it, which makes the jump
+                     * with a wide branch; the stub leaves b0 alone, so the
+                     * target still returns to this caller.
+                     */
+                    if (!hld_branch_in_range(P, S)) {
+                        stubent *sb = hld_stub_find(L, P, tg, tin, toff);
+                        if (!sb) {
+                            lerr(L, "call to %s is out of reach and has no "
+                                    "long-branch stub", sname, NULL);
+                            goto rfail;
+                        }
+                        S = hld_stub_addr(L, sb);
+                    }
+                    V = S - P;
+                    break;
+
                 case R_IA64_PCREL21BI:
                 case R_IA64_PCREL21F:
                 case R_IA64_PCREL21M:
@@ -1434,6 +1452,7 @@ void hld_link_free(hld_link *L)
     for (i = 0; i < L->nobjs; i++) hld_elf_free(L->objs[i]);
     free(L->objs);
     free(L->dynrels);
+    hld_free_stubs(L);
     {
         hld_archive *ar, *arn;
         for (ar = L->archives; ar; ar = arn) { arn = ar->next; hld_archive_free(ar); }

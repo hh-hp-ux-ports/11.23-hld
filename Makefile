@@ -17,7 +17,7 @@ CFLAGS  = $(CSTD) $(CWARN) $(COPT)
 BUILD   = build
 
 READER  = src/elfread.c
-LINKSRC = src/hld.c src/link.c src/write.c src/dynamic.c src/archive.c src/ia64_patch.c $(READER)
+LINKSRC = src/hld.c src/link.c src/write.c src/dynamic.c src/archive.c src/stubs.c src/ia64_patch.c $(READER)
 HDRS    = src/elf64.h src/port.h src/ia64_patch.h src/link.h
 
 all: $(BUILD)/hld $(BUILD)/hld-readelf $(BUILD)/patch_harness

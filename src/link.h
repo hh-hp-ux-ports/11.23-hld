@@ -124,6 +124,31 @@ typedef struct lnkent {
 } lnkent;
 
 /*
+ * A call whose target is too far away for a direct branch goes through one
+ * of these instead: a single bundle holding a wide branch, placed near the
+ * caller. Stubs are grouped into islands laid into the text at intervals, so
+ * that whichever call needs one has an island within a direct branch's reach.
+ */
+#define HLD_STUB_BUNDLE 16
+
+typedef struct stubent {
+    struct hld_gsym *g;       /* target, or NULL for a local one */
+    struct isec *in;          /* local target's section */
+    uint64_t off;             /* addend, or offset within `in` */
+    uint64_t slot;            /* byte offset within the island */
+    struct stubisl *isl;      /* the island holding it */
+    struct stubent *next;
+} stubent;
+
+typedef struct stubisl {
+    uint64_t zone;            /* which stretch of text this island serves */
+    uint64_t out_off;         /* where it sits in the text section */
+    uint64_t size;
+    stubent *stubs;
+    struct stubisl *next;
+} stubisl;
+
+/*
  * A data word that has to hold the address of something in another module.
  * hld cannot write it — only the loader knows where the other module lands —
  * so the word is seeded with the link-time binding and handed to the loader
@@ -184,6 +209,9 @@ typedef struct {
     uint64_t ndltrel;         /* DLT slots the loader has to fill */
     dynrel *dynrels;          /* data words naming another module's symbol */
     size_t ndynrel, dynrel_cap;
+    stubisl *islands;         /* long-branch stubs, laid into the text */
+    uint64_t nstubs;
+    osec *textsec;
     uint64_t nreladyn;        /* entries written to .rela.dyn so far */
     osec *pltsec, *reladynsec, *stubsec;
     char **libpaths;
@@ -234,6 +262,17 @@ int  hld_find_library(hld_link *L, const char *name, hld_archive **ar_out);
 int  hld_predefine_symbols(hld_link *L);
 int  hld_bind_imports(hld_link *L);
 int  hld_alloc_dynamic(hld_link *L);
+int  hld_alloc_stubs(hld_link *L);
+int  hld_write_stubs(hld_link *L);
+void hld_free_stubs(hld_link *L);
+int  hld_branch_in_range(uint64_t from, uint64_t to);
+stubent *hld_stub_find(hld_link *L, uint64_t from, hld_gsym *g, isec *in,
+                       uint64_t off);
+uint64_t hld_stub_addr(hld_link *L, const stubent *s);
+isec *hld_isec_of(hld_link *L, hld_elf *obj, uint32_t shndx);
+int  hld_reloc_target(hld_link *L, hld_elf *e, hld_sym *syms, size_t nsyms,
+                      const hld_rela *r, hld_gsym **g_out, isec **in_out,
+                      uint64_t *off_out, const char **name_out);
 int  hld_fill_dynamic(hld_link *L);
 
 /* write.c */

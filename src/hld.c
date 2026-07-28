@@ -163,8 +163,10 @@ int main(int argc, char **argv)
     if (hld_alloc_linkage(&L) < 0) goto fail;
     if (hld_alloc_dynamic(&L) < 0) goto fail;
     if (hld_layout(&L) < 0) goto fail;
+    if (hld_alloc_stubs(&L) < 0) goto fail;
     if (hld_build_contents(&L) < 0) goto fail;
     if (hld_fill_dynamic(&L) < 0) goto fail;
+    if (hld_write_stubs(&L) < 0) goto fail;
     if (hld_relocate(&L) < 0) goto fail;
     if (hld_finish_unwind(&L) < 0) goto fail;
     if (hld_write_exec(&L) < 0) goto fail;
