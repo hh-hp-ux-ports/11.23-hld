@@ -74,24 +74,31 @@ absent.
 
 ## Status
 
-Early, but it links and the results run.
+Early, but it links real programs and they run.
 
-**hld produces working static LP64 executables.** A hand-written assembly object
-linked by hld into an ET_EXEC — segments, program headers, symbol resolution,
-linker-defined symbols and all — executes correctly on HP-UX 11.23/Itanium and
-returns its expected exit status. hld also builds and runs natively on 11.23, where
-it links working binaries on the machine itself.
+**A compiled C program that calls `printf`, linked by hld against the system C
+library, prints correctly and exits cleanly on HP-UX 11.23/Itanium.** Static
+executables work too, and hld builds and runs natively on 11.23 — with GNU tools
+or with the vendor compiler alone.
 
-Working today: the ELF64-MSB reader (`hld-readelf`, cross-validated against GNU
-readelf), the IA-64 instruction-field relocation engine (golden-tested against gas
-encodings, including the bundle shapes HP ld corrupts), section collection and
-layout, symbol resolution with COMMON allocation, and static ET_EXEC output.
+Working today:
 
-Not there yet: archives and libraries, the DLT (GOT) and function-descriptor
-construction that `LTOFF`/`FPTR` relocations need, dynamic executables (the dld.so
-contract), shared libraries, unwind-table merging, and long-branch stubs.
-Relocations that need machinery hld does not have yet are rejected with a clear
-message rather than mis-applied.
+- ELF64-MSB reader (`hld-readelf`), cross-validated against GNU readelf.
+- IA-64 instruction-field relocation engine, golden-tested against assembler
+  output — including the bundle shapes HP's linker corrupts.
+- Section collection, address assignment, symbol resolution with COMMON (both
+  the generic and IA-64 flavors), and the linker-defined symbol set.
+- The DLT (GOT) and `.opd` function descriptors, so `LTOFF`/`FPTR` relocations
+  and function pointers work.
+- Static and dynamic `ET_EXEC` output: the loader handshake, shared libraries as
+  input, imports through `.plt` descriptors with generated call stubs, exported
+  dynamic symbols, and `DT_NEEDED`.
+
+Not there yet: archives (`.a`), shared-library *output*, unwind-table merging
+across objects, long-branch stubs for text beyond a branch's reach (the defect
+that blocks the large compiler binaries this project is aimed at), TLS, and
+debug-section handling. Anything hld cannot do yet is refused with a clear
+message rather than mis-linked.
 
 ## License
 
