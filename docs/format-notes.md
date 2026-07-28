@@ -127,6 +127,14 @@ The second rule is easy to violate accidentally: `p_filesz == 0` does *not*
 excuse an out-of-range `p_offset`. hld therefore always extends the output
 file to at least `data_off + data_filesz`.
 
+**A static executable is entered with `gp` == 0** — the kernel does not set it
+up (probed by exiting with the top nibble of `r1`). Only the dynamic loader
+sets `gp`, from `DT_PLTGOT`, before transferring control. Statically linked
+code that uses gp-relative addressing must therefore establish `gp` itself
+(`movl gp = __gp`), the job a startup file does on other platforms. This does
+not affect dynamically linked programs, which is what a real toolchain
+produces.
+
 Note that HP ld emits a dynamic executable (PT_INTERP, `.dynamic`, `.dynsym`,
 `.hash`, `.dynhash`) even for an object that references nothing outside
 itself — that is its policy, not a platform requirement.

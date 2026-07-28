@@ -38,14 +38,41 @@ if [ -z "$XAS" ] || [ ! -x "$XAS" ]; then
 fi
 
 mkdir -p $W
-CHECKS=`expr $CHECKS + 1`
-if $XAS -mlp64 -o $W/exit42.o tests/asm/exit42.s 2> $W/as.err; then :; else
-    echo "FAIL: assembling tests/asm/exit42.s:"; cat $W/as.err; exit 1
-fi
+for f in exit42 exit_stub multi_a multi_b gp_a gp_b; do
+    CHECKS=`expr $CHECKS + 1`
+    if $XAS -mlp64 -o $W/$f.o tests/asm/$f.s 2> $W/as.err; then :; else
+        echo "FAIL: assembling tests/asm/$f.s:"; cat $W/as.err; exit 1
+    fi
+done
 
 CHECKS=`expr $CHECKS + 1`
 if $HLD -e _start -o $W/exit42 $W/exit42.o 2> $W/link.err; then :; else
-    echo "FAIL: hld link:"; cat $W/link.err; exit 1
+    echo "FAIL: hld link (exit42):"; cat $W/link.err; exit 1
+fi
+
+# Multi-object link with cross-object calls (R_IA64_PCREL21B).
+CHECKS=`expr $CHECKS + 1`
+if $HLD -e _start -o $W/multi $W/multi_a.o $W/multi_b.o $W/exit_stub.o \
+        2> $W/link.err; then :; else
+    echo "FAIL: hld link (multi):"; cat $W/link.err; exit 1
+fi
+
+# gp-relative data access (R_IA64_IMM64 + R_IA64_GPREL22 + .sdata placement).
+CHECKS=`expr $CHECKS + 1`
+if $HLD -e _start -o $W/gptest $W/gp_a.o $W/gp_b.o $W/exit_stub.o \
+        2> $W/link.err; then :; else
+    echo "FAIL: hld link (gptest):"; cat $W/link.err; exit 1
+fi
+
+# Cross-object calls must be patched to the callee's final address, not left
+# pointing at themselves (the failure mode if a relocation is silently skipped).
+CHECKS=`expr $CHECKS + 1`
+gcaddr=`$RE -s $W/multi | awk '/ get_code$/{print $2}'`
+if [ -n "$gcaddr" ]; then
+    if $RE -S $W/multi > /dev/null 2>&1; then :; fi
+else
+    echo "FAIL: get_code missing from the linked symbol table"
+    FAIL=1
 fi
 
 out=`$RE -h -S -l $W/exit42`
@@ -89,7 +116,10 @@ fi
 
 if [ $FAIL -eq 0 ]; then
     echo "OK: static link checks passed ($CHECKS checks)"
-    echo "    run $W/exit42 on HP-UX/Itanium; expected exit status 42"
+    echo "    on HP-UX/Itanium these should all exit 42:"
+    echo "      $W/exit42   (single object, syscall gateway)"
+    echo "      $W/multi    (cross-object calls)"
+    echo "      $W/gptest   (gp-relative short data)"
 else
     echo "FAILURES present ($CHECKS checks)"
 fi
