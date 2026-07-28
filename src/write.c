@@ -312,6 +312,12 @@ int hld_write_exec(hld_link *L)
             if (L->has_tls)
                 PUT_PH(PT_TLS, PF_R, L->tls_off, L->tls_base,
                        L->tls_filesz, L->tls_memsz, 0x10);
+            if (L->unwind_sec) {
+                osec *uh = L->unwind_hdr_sec ? L->unwind_hdr_sec : L->unwind_sec;
+                osec *ue = L->unwind_info_sec ? L->unwind_info_sec : L->unwind_sec;
+                uint64_t usz = ue->addr + ue->size - uh->addr;
+                PUT_PH(PT_IA_64_UNWIND, PF_R, uh->off, uh->addr, usz, usz, 8);
+            }
 #undef PUT_PH
         }
 

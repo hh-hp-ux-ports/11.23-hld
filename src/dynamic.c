@@ -192,6 +192,7 @@ int hld_alloc_dynamic(hld_link *L)
     L->ndyntags = 12;
     for (d = L->dsos; d; d = d->next) if (d->needed) L->ndyntags++;
     if (nimp) L->ndyntags += 6;
+    L->ndyntags += 6;          /* init/fini/preinit array tags, when present */
     o->size = (uint64_t)L->ndyntags * DYN64_SIZE;
     o->align = 8;
     o->entsize = DYN64_SIZE;
@@ -364,6 +365,30 @@ int hld_fill_dynamic(hld_link *L)
             DYN(DT_RELA, L->relapltsec->addr);
             DYN(DT_RELASZ, L->relapltsec->size);
             DYN(DT_RELAENT, RELA64_SIZE);
+        }
+        /*
+         * Static constructors run because the loader is told where the
+         * initializer array is; without these the array is laid out and
+         * never walked, and a C++ program starts with its globals
+         * unconstructed — including the runtime's own.
+         */
+        {
+            osec *a;
+            a = osec_find_pub(L, ".init_array");
+            if (a && a->size) {
+                DYN(DT_INIT_ARRAY, a->addr);
+                DYN(DT_INIT_ARRAYSZ, a->size);
+            }
+            a = osec_find_pub(L, ".fini_array");
+            if (a && a->size) {
+                DYN(DT_FINI_ARRAY, a->addr);
+                DYN(DT_FINI_ARRAYSZ, a->size);
+            }
+            a = osec_find_pub(L, ".preinit_array");
+            if (a && a->size) {
+                DYN(DT_PREINIT_ARRAY, a->addr);
+                DYN(DT_PREINIT_ARRAYSZ, a->size);
+            }
         }
         DYN(DT_IA_64_PLT_RESERVE, reserve_addr);
         DYN(DT_HP_LOAD_MAP, loadmap_addr);

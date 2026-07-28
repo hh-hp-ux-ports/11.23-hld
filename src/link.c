@@ -93,6 +93,11 @@ static osec *osec_find(hld_link *L, const char *name)
     return NULL;
 }
 
+osec *osec_find_pub(hld_link *L, const char *name)
+{
+    return osec_find(L, name);
+}
+
 osec *osec_get(hld_link *L, const char *name, uint32_t type, uint64_t flags)
 {
     osec *o = osec_find(L, name);
@@ -136,13 +141,26 @@ static int collect_sections_of(hld_link *L, hld_elf *e)
             hld_shdr *sh = &e->shdrs[j];
             osec *o;
             isec *in;
+            const char *oname;
 
             if (!(sh->flags & SHF_ALLOC))
                 continue;   /* debug/comment/reloc/symtab: not laid out */
             if (sh->type == SHT_GROUP)
                 continue;
 
-            o = osec_get(L, sh->name, sh->type, sh->flags);
+            /*
+             * The compiler can emit a separate unwind section per function
+             * (.IA_64.unwind.text.NAME and its descriptors). They all have to
+             * end up in one table, contiguous and sorted, or the runtime
+             * cannot find the entry for a function it is unwinding through.
+             */
+            oname = sh->name;
+            if (sh->type == SHT_IA_64_UNWIND)
+                oname = ".IA_64.unwind";
+            else if (strncmp(sh->name, ".IA_64.unwind_info", 18) == 0)
+                oname = ".IA_64.unwind_info";
+
+            o = osec_get(L, oname, sh->type, sh->flags);
             if (!o) { lerr(L, "out of memory", NULL, NULL); return -1; }
             if (sh->addralign > o->align) o->align = sh->addralign;
             if (sh->entsize && !o->entsize) o->entsize = sh->entsize;
@@ -310,6 +328,68 @@ int hld_input_object(hld_link *L, hld_elf *e)
     return 0;
 }
 
+/*
+ * The unwind table needs a header describing it, which no input provides:
+ * three doublewords holding a version and the segment-relative bounds of the
+ * table. It is reserved here and filled once addresses are final.
+ */
+#define UNWIND_HDR_SIZE 24
+
+int hld_alloc_unwind(hld_link *L)
+{
+    osec *o, *unw = NULL;
+
+    for (o = L->osecs; o; o = o->next)
+        if (o->type == SHT_IA_64_UNWIND && o->size) { unw = o; break; }
+    if (!unw) return 0;
+
+    L->unwind_sec = unw;
+    L->unwind_info_sec = osec_find(L, ".IA_64.unwind_info");
+    o = osec_get(L, ".IA_64.unwind_hdr", SHT_PROGBITS, SHF_ALLOC);
+    if (!o) { lerr(L, "out of memory", NULL, NULL); return -1; }
+    o->size = UNWIND_HDR_SIZE;
+    o->align = 8;
+    L->unwind_hdr_sec = o;
+    return 0;
+}
+
+/*
+ * Entries have to be sorted by the address they describe: the runtime
+ * searches the table rather than walking it. Sorting happens after
+ * relocation, when the segment-relative values in each entry are final.
+ */
+int hld_finish_unwind(hld_link *L)
+{
+    uint8_t *p, *tmp;
+    size_t n, i, j;
+
+    if (!L->unwind_sec || !L->unwind_sec->data) return 0;
+
+    p = L->unwind_sec->data;
+    n = (size_t)(L->unwind_sec->size / UNWIND_HDR_SIZE);
+    tmp = malloc(UNWIND_HDR_SIZE);
+    if (!tmp) { lerr(L, "out of memory", NULL, NULL); return -1; }
+    for (i = 1; i < n; i++) {                    /* insertion sort: nearly ordered */
+        memcpy(tmp, p + i * UNWIND_HDR_SIZE, UNWIND_HDR_SIZE);
+        j = i;
+        while (j > 0 && be64(p + (j - 1) * UNWIND_HDR_SIZE) > be64(tmp)) {
+            memcpy(p + j * UNWIND_HDR_SIZE, p + (j - 1) * UNWIND_HDR_SIZE,
+                   UNWIND_HDR_SIZE);
+            j--;
+        }
+        memcpy(p + j * UNWIND_HDR_SIZE, tmp, UNWIND_HDR_SIZE);
+    }
+    free(tmp);
+
+    if (L->unwind_hdr_sec && L->unwind_hdr_sec->data) {
+        uint8_t *h = L->unwind_hdr_sec->data;
+        st64(h + 0, 2);                          /* version, as HP ld writes */
+        st64(h + 8, L->unwind_sec->addr - L->text_addr);
+        st64(h + 16, L->unwind_sec->addr + L->unwind_sec->size - L->text_addr);
+    }
+    return 0;
+}
+
 /* Seed an undefined symbol, as -u does, so it can drive archive extraction. */
 int hld_add_undefined(hld_link *L, const char *name)
 {
@@ -380,6 +460,7 @@ static const char *const hld_linker_symbols[] = {
     "__TLS_PREALLOC_DTV_A", "__SYSTEM_ID", "__profil_size",
     /* Segment markers and the dynamic-section address the loader looks up. */
     "_DYNAMIC", "__text_seg", "__data_seg", "__thread_specific_seg",
+    "__unwind_header",
     NULL
 };
 
@@ -436,7 +517,8 @@ int hld_layout(hld_link *L)
         if ((o->flags & SHF_ALLOC) && (o->flags & SHF_TLS) && o->size)
             L->has_tls = 1;
 
-    nphdr = (L->dynamic ? 5 : 3) + (L->has_tls ? 1 : 0);
+    nphdr = (L->dynamic ? 5 : 3) + (L->has_tls ? 1 : 0)
+            + (L->unwind_sec ? 1 : 0);
 
     L->nphdr = nphdr;
 
@@ -445,9 +527,32 @@ int hld_layout(hld_link *L)
     addr = HLD_TEXT_BASE + off;
     L->text_addr = HLD_TEXT_BASE;
 
+    /*
+     * The unwind header, table and descriptors lead the text segment and stay
+     * adjacent, so one program header can describe the lot — the arrangement
+     * the platform's linker produces.
+     */
+    {
+        osec *ord[3];
+        int k;
+        ord[0] = L->unwind_hdr_sec;
+        ord[1] = L->unwind_sec;
+        ord[2] = L->unwind_info_sec;
+        for (k = 0; k < 3; k++) {
+            o = ord[k];
+            if (!o || !sec_is_text(o->flags) || o->type == SHT_NOBITS) continue;
+            addr = align_up(addr, o->align);
+            off = align_up(off, o->align);
+            o->addr = addr; o->off = off;
+            addr += o->size; off += o->size;
+        }
+    }
+
     for (o = L->osecs; o; o = o->next) {
         if (!sec_is_text(o->flags)) continue;
         if (o->type == SHT_NOBITS) continue;    /* no NOBITS in text */
+        if (o == L->unwind_hdr_sec || o == L->unwind_sec
+            || o == L->unwind_info_sec) continue;
         addr = align_up(addr, o->align);
         off = align_up(off, o->align);
         o->addr = addr;
@@ -563,6 +668,8 @@ int hld_layout(hld_link *L)
     if (def_abs(L, "_edata", L->data_addr + L->data_filesz) < 0) return -1;
     if (def_abs(L, "_end", L->data_addr + L->data_memsz) < 0) return -1;
     if (def_abs(L, "__gp", L->gp) < 0) return -1;
+    if (def_abs(L, "__unwind_header",
+                L->unwind_hdr_sec ? L->unwind_hdr_sec->addr : 0) < 0) return -1;
     /*
      * Array bounds and thread-local descriptors. With no such sections
      * present these collapse to the start of the data segment and to zero

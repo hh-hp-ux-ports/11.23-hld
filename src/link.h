@@ -146,6 +146,9 @@ typedef struct {
     uint64_t ndlt, nopd, npltoff;
     osec *dltsec, *opdsec, *pltoffsec;
 
+    /* unwind tables */
+    osec *unwind_hdr_sec, *unwind_sec, *unwind_info_sec;
+
     /* thread-local storage template */
     uint64_t tls_base, tls_filesz, tls_memsz, tls_off;
     int has_tls;
@@ -188,6 +191,8 @@ int  hld_add_object(hld_link *L, const char *path);
 int  hld_input_object(hld_link *L, hld_elf *e);
 int  hld_add_undefined(hld_link *L, const char *name);
 int  hld_allocate_commons(hld_link *L);
+int  hld_alloc_unwind(hld_link *L);
+int  hld_finish_unwind(hld_link *L);
 int  hld_alloc_linkage(hld_link *L);
 int  hld_layout(hld_link *L);
 int  hld_build_contents(hld_link *L);
@@ -196,6 +201,7 @@ void hld_print_map(hld_link *L);
 void hld_link_free(hld_link *L);
 hld_gsym *hld_sym_lookup(hld_link *L, const char *name);
 osec *osec_get(hld_link *L, const char *name, uint32_t type, uint64_t flags);
+osec *osec_find_pub(hld_link *L, const char *name);
 
 /* archive.c */
 int  hld_archive_open(hld_link *L, const char *path, hld_archive **out);
