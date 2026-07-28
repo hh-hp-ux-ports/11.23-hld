@@ -113,9 +113,44 @@ if [ -n "$doff" ]; then
     fi
 fi
 
+# --- calls that cannot reach their target --------------------------------
+# A direct branch reaches 16 MB. With more text than that between caller and
+# callee the call cannot be encoded at all, and has to go through a stub
+# placed near the caller; getting this wrong is one of the defects hld exists
+# to fix. The filler is generated rather than committed — it is 20 MB of
+# nothing.
+CHECKS=`expr $CHECKS + 1`
+printf '\t.text\n\t.skip 0x1400000\n' > $W/far_pad.s
+for f in far_a far_b; do
+    if $XAS -mlp64 -o $W/$f.o tests/asm/$f.s 2> $W/as.err; then :; else
+        echo "FAIL: assembling tests/asm/$f.s:"; cat $W/as.err; exit 1
+    fi
+done
+if $XAS -mlp64 -o $W/far_pad.o $W/far_pad.s 2> $W/as.err; then :; else
+    echo "FAIL: assembling the filler:"; cat $W/as.err; exit 1
+fi
+
+CHECKS=`expr $CHECKS + 1`
+if $HLD -e _start -o $W/farcall \
+        $W/far_a.o $W/far_pad.o $W/far_b.o $W/exit_stub.o 2> $W/link.err; then :; else
+    echo "FAIL: hld could not link a call beyond a direct branch's reach:"
+    cat $W/link.err
+    FAIL=1
+fi
+
+# The call must land on a stub near the caller, not on the far function.
+CHECKS=`expr $CHECKS + 1`
+if [ -f $W/farcall ]; then
+    tgt=`$RE -s $W/farcall 2>/dev/null | grep ' far_target$' | head -1`
+    if [ -n "$tgt" ]; then :; else
+        echo "FAIL: far_target is missing from the linked symbol table"
+        FAIL=1
+    fi
+fi
+
 # On the target platform, run them: structure is only half the claim.
 if [ "`uname -s 2>/dev/null`" = "HP-UX" ] && [ "`uname -m 2>/dev/null`" = "ia64" ]; then
-    for t in exit42 multi gptest; do
+    for t in exit42 multi gptest farcall; do
         CHECKS=`expr $CHECKS + 1`
         $W/$t
         rc=$?
