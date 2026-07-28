@@ -43,5 +43,13 @@ check: all
 	sh tests/check_link.sh
 	sh tests/check_dynamic.sh
 
+# An SD depot for swinstall. Must be built on HP-UX (swpackage lives there);
+# works as an ordinary user. Ships the binaries, an `ld` alias that takes
+# precedence over the system linker on PATH, and the corresponding source.
+VERSION = 0.1
+
+package: all
+	sh scripts/mkdepot.sh $(VERSION)
+
 clean:
 	rm -rf $(BUILD)

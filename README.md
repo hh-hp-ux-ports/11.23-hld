@@ -65,6 +65,10 @@ toolchain present — which is the situation this linker exists to improve. (The
 bundled `/usr/bin/cc` is not an ANSI compiler and cannot be used; aC++ in `-Ae`
 mode can.)
 
+`make package` builds an SD depot for `swinstall`, carrying the binaries, an
+`ld` alias that takes precedence over the system linker on PATH, and the
+complete corresponding source — see `docs/packaging.md`.
+
 `make check` runs the suites. The reader and relocation tests run anywhere; the
 link tests need an `ia64-hp-hpux` assembler (point `XAS` at one, or put it in an
 untracked `tests/local.conf` — see `tests/local.conf.example`); the dynamic tests
