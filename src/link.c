@@ -181,6 +181,15 @@ static int collect_sections_of(hld_link *L, hld_elf *e)
             in->idx = j;
             in->sh = sh;
             in->out = o;
+            if (!e->isec_by_shndx) {
+                e->isec_by_shndx = calloc(e->eh.shnum, sizeof *e->isec_by_shndx);
+                if (!e->isec_by_shndx) {
+                    lerr(L, "out of memory", NULL, NULL);
+                    free(in);
+                    return -1;
+                }
+            }
+            e->isec_by_shndx[j] = in;
             /* place this contribution at the current end of the output */
             in->out_off = align_up(o->size, sh->addralign ? sh->addralign : 1);
             o->size = in->out_off + sh->size;
@@ -228,14 +237,9 @@ static hld_gsym *sym_intern(hld_link *L, const char *name)
 /* Find the input-section record for (obj, shndx). */
 isec *hld_isec_of(hld_link *L, hld_elf *obj, uint32_t shndx)
 {
-    osec *o;
-    isec *in;
-
-    for (o = L->osecs; o; o = o->next)
-        for (in = o->first; in; in = in->next)
-            if (in->obj == obj && in->idx == shndx)
-                return in;
-    return NULL;
+    (void)L;
+    if (!obj->isec_by_shndx || shndx >= obj->eh.shnum) return NULL;
+    return (isec *)obj->isec_by_shndx[shndx];
 }
 
 static int resolve_symbols_of(hld_link *L, hld_elf *e)

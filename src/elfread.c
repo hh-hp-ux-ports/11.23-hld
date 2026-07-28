@@ -191,6 +191,7 @@ void hld_elf_free(hld_elf *e)
     if (e->owns_data) free(e->data);
     free(e->shdrs);
     free(e->phdrs);
+    free(e->isec_by_shndx);
     free(e);
 }
 

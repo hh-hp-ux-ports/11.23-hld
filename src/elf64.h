@@ -457,6 +457,13 @@ typedef struct {
     hld_ehdr eh;
     hld_shdr *shdrs;         /* eh.shnum entries (0 if none) */
     hld_phdr *phdrs;         /* eh.phnum entries */
+    /*
+     * Section number -> the linker's record for it, eh.shnum entries. Owned
+     * by the linker, which fills it as it collects sections; the reader only
+     * frees it. Relocation resolution asks this question once per relocation,
+     * and a large C++ link has millions, so it cannot be a search.
+     */
+    void **isec_by_shndx;
 } hld_elf;
 
 /* elfread.c */
