@@ -33,7 +33,8 @@ static void usage(void)
         "               nothing further is pulled in\n"
         "  -V           print version\n"
         "Archives are searched at their position on the command line.\n"
-        "hld does not produce shared libraries yet.\n");
+        "  -b           produce a shared library (ET_DYN) instead of a program\n"
+        "  +h NAME      the name it records for itself (DT_SONAME)\n");
 }
 
 int main(int argc, char **argv)
@@ -60,8 +61,12 @@ int main(int argc, char **argv)
          */
         if (a[0] == '+') {
             /* two-token forms */
+            if (strcmp(a, "+h") == 0 && i + 1 < argc) {
+                L.soname = argv[++i];       /* the name recorded in DT_SONAME */
+                continue;
+            }
             if (strcmp(a, "+Accept") == 0 || strcmp(a, "+b") == 0
-                || strcmp(a, "+h") == 0 || strcmp(a, "+e") == 0
+                || strcmp(a, "+e") == 0
                 || strcmp(a, "+nodefaultrpath") == 0) {
                 if (strcmp(a, "+nodefaultrpath") != 0 && i + 1 < argc) ++i;
                 continue;
@@ -98,8 +103,11 @@ int main(int argc, char **argv)
 
         /* Options accepted by HP ld that hld cannot honor yet. */
         if (strcmp(a, "-b") == 0) {
-            fprintf(stderr, "hld: -b (shared library output) is not implemented yet\n");
-            return 1;
+            /* A shared library has no entry point and needs no interpreter. */
+            L.shared = 1;
+            L.dynamic = 1;
+            L.entry_name = NULL;
+            continue;
         }
         if (strcmp(a, "--start-group") == 0 || strcmp(a, "-(") == 0) {
             in_group = 1;

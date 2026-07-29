@@ -671,6 +671,17 @@ int hld_layout(hld_link *L)
     L->data_memsz = addr - L->data_addr;
 
     /*
+     * A shared library anchors gp inside the region reserved for the loader,
+     * the way the platform's linker does, rather than on the first word of
+     * its own short data. The loader writes its own words at gp; with gp
+     * pointing at a variable instead, that variable is quietly overwritten
+     * when the library is loaded, and the program reads whatever the loader
+     * left behind.
+     */
+    if (L->shared && L->reservesec)
+        L->gp = L->reservesec->addr + L->reserve_off + 8;
+
+    /*
      * Sections that are not part of the image follow it in the file, with no
      * address of their own. Their relocations then resolve section-relative,
      * which is exactly what the debug format's references between sections
@@ -755,6 +766,7 @@ int hld_layout(hld_link *L)
     }
 
     /* Entry point. */
+    if (!L->entry_name) { L->entry = 0; return 0; }   /* a library has none */
     g = hld_sym_lookup(L, L->entry_name);
     if (!g || g->kind == HLD_SYM_UNDEF) {
         lerr(L, "entry symbol `%s' is not defined", L->entry_name, NULL);
@@ -1083,6 +1095,8 @@ oom:
      * executable they are fully resolved at link time, so they can live in the
      * read-only text segment (which is where HP's linker puts them too).
      */
+    if (L->nopd && L->shared && L->opdsec)
+        L->opdsec->flags |= SHF_WRITE;   /* a library's descriptors are data */
     if (L->ndlt) {
         L->dltsec = osec_get(L, ".dlt", SHT_PROGBITS,
                              SHF_ALLOC | SHF_WRITE | SHF_IA_64_SHORT);
@@ -1488,7 +1502,8 @@ void hld_print_map(hld_link *L)
     unsigned h;
     hld_gsym *g;
 
-    printf("Entry symbol  : %s = 0x%llx\n", L->entry_name, U(L->entry));
+    printf("Entry symbol  : %s = 0x%llx\n",
+           L->entry_name ? L->entry_name : "(none, shared library)", U(L->entry));
     printf("\nSegment -- loadable executable\n\n");
     for (o = L->osecs; o; o = o->next)
         if (sec_is_text(o->flags) && o->type != SHT_NOBITS)

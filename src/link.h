@@ -224,6 +224,9 @@ typedef struct {
 
     /* dynamic output */
     int dynamic;
+    int shared;               /* -b: emit a shared library, not an executable */
+    const char *soname;       /* +h, or the output's basename */
+    uint32_t soname_strx;
     hld_dso *dsos, **dso_tail;
     size_t ndsos, nimports;
     uint64_t ndltrel;         /* DLT slots the loader has to fill */
@@ -282,6 +285,7 @@ int  hld_predefine_symbols(hld_link *L);
 int  hld_bind_imports(hld_link *L);
 int  hld_alloc_dynamic(hld_link *L);
 int  hld_alloc_stubs(hld_link *L);
+int  hld_dlt_needs_loader(hld_link *L, const lnkent *l);
 int  hld_write_stubs(hld_link *L);
 void hld_free_stubs(hld_link *L);
 int  hld_branch_in_range(uint64_t from, uint64_t to);

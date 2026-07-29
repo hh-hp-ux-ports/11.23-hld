@@ -1,5 +1,5 @@
 /*
- * write.c — emit an HP-UX/IPF LP64 ET_EXEC image.
+ * write.c — emit an HP-UX/IPF LP64 image, executable or shared library.
  *
  * A static image is two LOAD segments plus PT_PHDR; a dynamic one adds
  * PT_INTERP and PT_DYNAMIC. The file layout mirrors what HP ld produces — the text segment is mapped from
@@ -298,8 +298,11 @@ int hld_write_exec(hld_link *L)
                    (uint64_t)nphdr * PHDR64_SIZE,
                    (uint64_t)nphdr * PHDR64_SIZE, 8);
             if (L->dynamic) {
-                PUT_PH(PT_INTERP, PF_R, L->interpsec->off, L->interpsec->addr,
-                       L->interpsec->size, L->interpsec->size, 1);
+                /* A library is not started by the kernel: no interpreter. */
+                if (L->interpsec)
+                    PUT_PH(PT_INTERP, PF_R, L->interpsec->off,
+                           L->interpsec->addr, L->interpsec->size,
+                           L->interpsec->size, 1);
                 PUT_PH(PT_DYNAMIC, PF_R, L->dynamicsec->off,
                        L->dynamicsec->addr, L->dynamicsec->size,
                        L->dynamicsec->size, 8);
@@ -329,7 +332,7 @@ int hld_write_exec(hld_link *L)
         eh[6] = EV_CURRENT;
         eh[7] = ELFOSABI_HPUX;
         eh[8] = HPUX_ABIVERSION;
-        st16(eh + 16, ET_EXEC);
+        st16(eh + 16, L->shared ? ET_DYN : ET_EXEC);
         st16(eh + 18, EM_IA_64);
         st32(eh + 20, EV_CURRENT);
         st64(eh + 24, L->entry);

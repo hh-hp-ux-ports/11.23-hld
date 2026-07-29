@@ -130,17 +130,30 @@ int hld_alloc_dynamic(hld_link *L)
     L->ndynsym = nsym;
     L->nimports = nimp;
 
+    if (L->shared) {
+        /*
+         * What the library calls itself. Anything linking against it records
+         * this name, not the path it happened to be found at.
+         */
+        if (!L->soname) {
+            const char *b = strrchr(L->out_path, '/');
+            L->soname = b ? b + 1 : L->out_path;
+        }
+        L->soname_strx = dynstr_add(L, L->soname);
+    }
     for (d = L->dsos; d; d = d->next)
         if (d->needed && !d->indirect) d->strx = dynstr_add(L, d->soname);
     for (h = 0; h < HLD_SYMHASH; h++)
         for (g = L->hash[h]; g; g = g->next)
             if (g->dynidx) g->strx = dynstr_add(L, g->name);
 
-    o = osec_get(L, ".interp", SHT_PROGBITS, SHF_ALLOC);
-    if (!o) return -1;
-    o->size = sizeof hld_interp;
-    o->align = 1;
-    L->interpsec = o;
+    if (!L->shared) {                 /* a library has no interpreter */
+        o = osec_get(L, ".interp", SHT_PROGBITS, SHF_ALLOC);
+        if (!o) return -1;
+        o->size = sizeof hld_interp;
+        o->align = 1;
+        L->interpsec = o;
+    }
 
     o = osec_get(L, ".dynsym", SHT_DYNSYM, SHF_ALLOC);
     if (!o) return -1;
@@ -173,24 +186,6 @@ int hld_alloc_dynamic(hld_link *L)
         o->entsize = 16;
         L->pltsec = o;
 
-        /*
-         * Everything the loader has to write goes in one array: the import
-         * descriptors, the linkage-table slots that name another module, and
-         * the data words holding such an address. Keeping them together means
-         * one DT_RELA span to advertise, with no assumption about how the
-         * sections happen to be laid out.
-         */
-        L->ndltrel = 0;
-        for (l = L->dlt; l; l = l->next)
-            if (l->g && l->g->kind == HLD_SYM_IMPORT) L->ndltrel++;
-
-        o = osec_get(L, ".rela.dyn", SHT_RELA, SHF_ALLOC);
-        if (!o) return -1;
-        o->size = (nimp + L->ndltrel + L->ndynrel) * RELA64_SIZE;
-        o->align = 8;
-        o->entsize = RELA64_SIZE;
-        L->reladynsec = o;
-
         o = osec_get(L, ".stub", SHT_PROGBITS,
                      SHF_ALLOC | SHF_EXECINSTR);
         if (!o) return -1;
@@ -199,11 +194,36 @@ int hld_alloc_dynamic(hld_link *L)
         L->stubsec = o;
     }
 
+    /*
+     * Everything the loader has to write goes in one array: the import
+     * descriptors, the linkage-table slots it has to fill, and the data words
+     * holding such an address. Keeping them together means one DT_RELA span to
+     * advertise, with no assumption about how the sections are laid out.
+     *
+     * A library needs this even with no imports at all. It can be mapped at an
+     * address other than the one it was linked at, and its own exported
+     * symbols can be interposed by whatever loaded it, so a table slot naming
+     * one is the loader's to fill — not hld's.
+     */
+    L->ndltrel = 0;
+    for (l = L->dlt; l; l = l->next)
+        if (hld_dlt_needs_loader(L, l)) L->ndltrel++;
+
+    if (nimp || L->ndltrel || L->ndynrel) {
+        o = osec_get(L, ".rela.dyn", SHT_RELA, SHF_ALLOC);
+        if (!o) return -1;
+        o->size = (nimp + L->ndltrel + L->ndynrel) * RELA64_SIZE;
+        o->align = 8;
+        o->entsize = RELA64_SIZE;
+        L->reladynsec = o;
+    }
+
     o = osec_get(L, ".dynamic", SHT_DYNAMIC, SHF_ALLOC);
     if (!o) return -1;
-    L->ndyntags = 12;
+    L->ndyntags = 13;                  /* the always-present set + DT_SONAME */
     for (d = L->dsos; d; d = d->next) if (d->needed) L->ndyntags++;
-    if (nimp) L->ndyntags += 6;
+    if (nimp) L->ndyntags += 3;        /* PLT reserve, dld flags, load map */
+    if (L->reladynsec) L->ndyntags += 3;   /* RELA, RELASZ, RELAENT */
     L->ndyntags += 6;          /* init/fini/preinit array tags, when present */
     o->size = (uint64_t)L->ndyntags * DYN64_SIZE;
     o->align = 8;
@@ -221,6 +241,18 @@ int hld_alloc_dynamic(hld_link *L)
     o->size += LOAD_MAP_SIZE;
     L->reservesec = o;
     return 0;
+}
+
+/*
+ * Is this linkage-table slot the loader's to fill? Always when it names
+ * something in another module; and in a shared library also when it names one
+ * of its own exports, which can be interposed or moved.
+ */
+int hld_dlt_needs_loader(hld_link *L, const lnkent *l)
+{
+    if (!l->g) return 0;
+    if (l->g->kind == HLD_SYM_IMPORT) return 1;
+    return L->shared && l->g->kind == HLD_SYM_DEFINED;
 }
 
 /* Append one entry to the relocation array the loader walks at load time. */
@@ -255,7 +287,7 @@ int hld_fill_dynamic(hld_link *L)
     reserve_addr = L->reservesec->addr + L->reserve_off;
     loadmap_addr = L->reservesec->addr + L->loadmap_off;
 
-    if (L->interpsec->data)
+    if (L->interpsec && L->interpsec->data)
         memcpy(L->interpsec->data, hld_interp, sizeof hld_interp);
     if (L->dynstrsec->data && L->dynstr)
         memcpy(L->dynstrsec->data, L->dynstr, L->dynstr_len);
@@ -327,7 +359,7 @@ int hld_fill_dynamic(hld_link *L)
         lnkent *l;
         size_t n;
         for (l = L->dlt; l; l = l->next) {
-            if (!l->g || l->g->kind != HLD_SYM_IMPORT) continue;
+            if (!hld_dlt_needs_loader(L, l)) continue;
             reladyn_add(L, L->dltsec->addr + l->slot, l->g->dynidx,
                         l->kind == HLD_DLT_FPTR ? R_IA64_FPTR64MSB
                                                 : R_IA64_DIR64MSB, 0);
@@ -380,15 +412,26 @@ int hld_fill_dynamic(hld_link *L)
 
     if (L->dynamicsec->data) {
         p = L->dynamicsec->data;
+        /*
+         * Dropping a tag because the array was sized too small is silent and
+         * ruinous: the loader simply never learns what it was not told. The
+         * count is a prediction made before the contents are known, so check
+         * it rather than trust it.
+         */
 #define DYN(tag, val) do { \
-            if (nd < L->ndyntags) { \
-                st64(p + nd * DYN64_SIZE, (uint64_t)(tag)); \
-                st64(p + nd * DYN64_SIZE + 8, (uint64_t)(val)); \
-                nd++; \
+            if (nd >= L->ndyntags) { \
+                snprintf(L->err, HLD_ERRSZ, \
+                         "internal: .dynamic needs more than the %u entries " \
+                         "reserved for it", (unsigned)L->ndyntags); \
+                return -1; \
             } \
+            st64(p + nd * DYN64_SIZE, (uint64_t)(tag)); \
+            st64(p + nd * DYN64_SIZE + 8, (uint64_t)(val)); \
+            nd++; \
         } while (0)
         for (d = L->dsos; d; d = d->next)
             if (d->needed && !d->indirect) DYN(DT_NEEDED, d->strx);
+        if (L->shared) DYN(DT_SONAME, L->soname_strx);
         /*
          * Ask for immediate binding: hld does not emit the lazy-resolution
          * trampoline, so every import must be bound before control reaches
@@ -401,9 +444,9 @@ int hld_fill_dynamic(hld_link *L)
         DYN(DT_SYMTAB, L->dynsymsec->addr);
         DYN(DT_STRSZ, L->dynstrsec->size);
         DYN(DT_SYMENT, SYM64_SIZE);
-        if (L->nimports) {
+        if (L->reladynsec) {
             /*
-             * Advertise the import relocations once, through DT_RELA only.
+             * Advertise the relocations once, through DT_RELA only.
              * Naming the same array again as DT_JMPREL — which is what the
              * platform's linker does for lazy binding — makes the loader
              * process it a second time and reject the image, since hld asks
@@ -438,7 +481,12 @@ int hld_fill_dynamic(hld_link *L)
             }
         }
         DYN(DT_IA_64_PLT_RESERVE, reserve_addr);
-        DYN(DT_HP_LOAD_MAP, loadmap_addr);
+        /*
+         * The load-map word is the loader's to write, and it is an
+         * executable's business: the platform's linker emits this tag for a
+         * program and not for a library.
+         */
+        if (!L->shared) DYN(DT_HP_LOAD_MAP, loadmap_addr);
         DYN(DT_FLAGS, 0);
         DYN(DT_NULL, 0);
 #undef DYN
