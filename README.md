@@ -104,10 +104,14 @@ Working today:
   and archives from the vendor compiler as well as from gcc.
 - Thread-local storage, initializer and finalizer arrays, and one merged, sorted
   unwind table with its header and segment — enough for C++ exceptions.
-
 - Long-branch stubs for calls beyond a direct branch's 16 MB reach, spread
   through the code so a caller anywhere has one within range — the defect that
   blocks large compiler binaries.
+- Shared libraries (`-b`): `ET_DYN` with a soname, and the dynamic relocations that
+  let the loader place the library wherever it likes — verified by loading one and
+  reading its data through it.
+- Debug information: `.debug_*` carried through and relocated, so the debugger can
+  set breakpoints by source line and walk a stack.
 
 **It links gcc 9.5's compilers** — `cc1`, `cc1plus` and `lto1`, each from several hundred
 objects and archives, 37 MB of text in the largest — and the results run and compile to
@@ -118,12 +122,6 @@ both `cc1plus` binaries and counting `br.call` instructions whose target lies pa
 `_etext` gives **26** for the system linker and **0** for hld; and the library source file
 that first exposed the defect fails with `internal compiler error: Segmentation fault`
 under the system linker's binary while compiling cleanly under hld's.
-
-- Shared libraries (`-b`): `ET_DYN` with a soname, and the dynamic relocations that
-  let the loader place the library wherever it likes — verified by loading one and
-  reading its data through it.
-- Debug information: `.debug_*` carried through and relocated, so the debugger can
-  set breakpoints by source line and walk a stack.
 
 Not there yet: COMDAT/`.gnu.linkonce` duplicate discarding at scale, local symbols in
 the output symbol table, and thread-local storage in a shared library. An input hld
