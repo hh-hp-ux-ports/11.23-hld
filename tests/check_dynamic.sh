@@ -178,6 +178,59 @@ CEOF
     fi
 fi
 
+# --- shared library output ------------------------------------------------
+# A library is loaded wherever the loader puts it, so every linkage-table
+# slot naming one of its own symbols is the loader's to fill, and hld must
+# both emit the relocation and advertise the array it lives in. Getting the
+# advertisement wrong is silent: the library loads, and reads whatever
+# happens to be at the address it was linked for.
+CC=/opt/gcc474/bin/gcc
+[ -x $CC ] || CC=gcc
+CHECKS=`expr $CHECKS + 1`
+cat > $W/shlib.c <<'CEOF'
+int lib_var = 7;
+int *lib_addr(void) { return &lib_var; }
+int lib_value(void) { return lib_var; }
+CEOF
+cat > $W/shmain.c <<'CEOF'
+extern int *lib_addr(void);
+extern int lib_value(void);
+int main(void) { return (*lib_addr() == lib_value()) ? lib_value() : 1; }
+CEOF
+if $CC -mlp64 -fPIC -c $W/shlib.c -o $W/shlib.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b -o $W/libhldtest.so $W/shlib.o 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        out=`$RE -h -d $W/libhldtest.so`
+        for pat in "DYN" "SONAME" "RELA "; do
+            CHECKS=`expr $CHECKS + 1`
+            if printf '%s\n' "$out" | grep "$pat" > /dev/null 2>&1; then :; else
+                echo "FAIL: the shared library lacks $pat"
+                FAIL=1
+            fi
+        done
+        # The real test: a program links against it and reads through it.
+        CHECKS=`expr $CHECKS + 1`
+        if $CC -mlp64 -o $W/shprog $W/shmain.c -L$W -lhldtest 2> $W/link.err; then
+            CHECKS=`expr $CHECKS + 1`
+            SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/shprog
+            rc=$?
+            if [ $rc -ne 7 ]; then
+                echo "FAIL: through the hld-built library, got $rc, expected 7"
+                echo "      (the library's own data did not relocate with it)"
+                FAIL=1
+            fi
+        else
+            echo "FAIL: linking a program against the hld-built library:"
+            cat $W/link.err
+            FAIL=1
+        fi
+    else
+        echo "FAIL: hld could not produce a shared library:"; cat $W/link.err
+        FAIL=1
+    fi
+fi
+
 # --- debug information ----------------------------------------------------
 # Debug sections are not loaded, but dropping them is silent: the link
 # succeeds and the result simply cannot be debugged. They have to be carried
