@@ -204,6 +204,28 @@ Getting this wrong is quiet: the slot or word keeps whatever the linker left
 there, and the program faults inside the runtime's own start-up rather than at
 the reference that was mis-resolved.
 
+### What a shared library needs
+
+A library is built at the same addresses as a program — text `0x4000...`, data
+`0x6000...` — and the loader maps it elsewhere. So nothing it was linked at can be
+taken as final:
+
+- `ET_DYN`, entry 0, and **no `PT_INTERP`** (only a program is started by the kernel).
+- `DT_SONAME` is what dependants record, not the path the library was found at.
+- Function descriptors move to the **data** segment.
+- **Every linkage-table slot naming one of its own exported symbols needs a `DIR64`
+  relocation.** In a program those are resolved at link time; in a library they are
+  the loader's to fill, both because the library moves and because its exports can be
+  interposed by whatever loaded it. The slot is still seeded with the link-time
+  address, as the platform's linker does.
+- A library therefore needs `DT_RELA`/`DT_RELASZ`/`DT_RELAENT` **even with no imports
+  at all**.
+
+That last point is worth stating because getting it wrong is quiet. The library loads,
+the loader is never told there are relocations to apply, and the program reads whatever
+now occupies the address the library was linked for — no diagnostic, no fault, just a
+wrong value.
+
 ### Calls beyond a direct branch's reach
 
 `R_IA64_PCREL21B` carries 21 bits of bundle-granular displacement: ±16 MB. A

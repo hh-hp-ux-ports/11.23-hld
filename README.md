@@ -119,7 +119,14 @@ both `cc1plus` binaries and counting `br.call` instructions whose target lies pa
 that first exposed the defect fails with `internal compiler error: Segmentation fault`
 under the system linker's binary while compiling cleanly under hld's.
 
-Not there yet: shared-library *output* and debug-section handling. An input hld
+- Shared libraries (`-b`): `ET_DYN` with a soname, and the dynamic relocations that
+  let the loader place the library wherever it likes — verified by loading one and
+  reading its data through it.
+- Debug information: `.debug_*` carried through and relocated, so the debugger can
+  set breakpoints by source line and walk a stack.
+
+Not there yet: COMDAT/`.gnu.linkonce` duplicate discarding at scale, local symbols in
+the output symbol table, and thread-local storage in a shared library. An input hld
 cannot handle is refused with a clear message rather than mis-linked.
 
 ## License
