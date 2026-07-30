@@ -29,12 +29,12 @@ static void usage(void)
         "  -l NAME      link libNAME.so, libNAME.so.1 or libNAME.a\n"
         "  -a MODE      what -l looks for: archive, shared, archive_shared,\n"
         "               shared_archive or default\n"
+        "  -b, -shared  produce a shared library (ET_DYN) instead of a program\n"
+        "  +h NAME      the name it records for itself (DT_SONAME); -soname too\n"
         "  --start-group ... --end-group   re-search these archives until\n"
         "               nothing further is pulled in\n"
         "  -V           print version\n"
-        "Archives are searched at their position on the command line.\n"
-        "  -b           produce a shared library (ET_DYN) instead of a program\n"
-        "  +h NAME      the name it records for itself (DT_SONAME)\n");
+        "Archives are searched at their position on the command line.\n");
 }
 
 int main(int argc, char **argv)
@@ -101,8 +101,12 @@ int main(int argc, char **argv)
         }
         if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) { usage(); return 0; }
 
-        /* Options accepted by HP ld that hld cannot honor yet. */
-        if (strcmp(a, "-b") == 0) {
+        /*
+         * -b is the platform spelling; the compiler driver's specs turn
+         * -shared into it before the linker is reached. Accept the GNU
+         * spelling too, for anything that drives ld directly.
+         */
+        if (strcmp(a, "-b") == 0 || strcmp(a, "-shared") == 0) {
             /* A shared library has no entry point and needs no interpreter. */
             L.shared = 1;
             L.dynamic = 1;
@@ -153,6 +157,11 @@ int main(int argc, char **argv)
             }
             continue;
         }
+        if (strcmp(a, "-soname") == 0 && i + 1 < argc) {
+            L.soname = argv[++i];           /* the GNU spelling of +h */
+            continue;
+        }
+        if (strncmp(a, "-soname=", 8) == 0) { L.soname = a + 8; continue; }
         if (a[0] == '-' && a[1] == 'l') {
             const char *nm = a[2] ? a + 2 : (i + 1 < argc ? argv[++i] : NULL);
             hld_archive *ar = NULL;
