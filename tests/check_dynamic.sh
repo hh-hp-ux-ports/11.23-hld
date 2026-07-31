@@ -178,6 +178,55 @@ CEOF
     fi
 fi
 
+# --- thread-local storage, general-dynamic model --------------------------
+# Code that cannot assume a variable is in its own module loads two table
+# slots — the owning module and the offset within that module's block — and
+# calls __tls_get_addr. In a program both are known at link time. The values
+# are the platform linker's: module -1, offset from the same base a TPREL
+# counts from. libstdc++ needs this, so a C++ link stops without it.
+CHECKS=`expr $CHECKS + 1`
+cat > $W/gd.c <<'CEOF'
+#include <stdio.h>
+static __thread int tls_a = 11;
+static __thread int tls_b = 22;
+int *get_a(void) { return &tls_a; }
+int main(void) {
+    int *a = get_a();
+    printf("%d %d\n", *a, tls_b);
+    return (*a == 11 && tls_b == 22) ? 0 : 1;
+}
+CEOF
+CC=/opt/gcc474/bin/gcc
+[ -x $CC ] || CC=gcc
+if $CC -mlp64 -fPIC -O0 -c $W/gd.c -o $W/gd.o 2> $W/cc.err; then :; else
+    echo "FAIL: could not compile the dynamic-TLS fixture:"; cat $W/cc.err
+    FAIL=1
+fi
+if [ -f $W/gd.o ]; then
+    # the compiler must actually have emitted the general-dynamic pair
+    CHECKS=`expr $CHECKS + 1`
+    if $RE -r $W/gd.o 2>/dev/null | grep 'DTPMOD' > /dev/null 2>&1; then :; else
+        echo "NOTE: this compiler did not emit LTOFF_DTPMOD22; TLS check is weaker"
+    fi
+    mkdir -p $W/gdbin
+    rm -f $W/gdbin/ld
+    ln -s "`pwd`/$HLD" $W/gdbin/ld
+    CHECKS=`expr $CHECKS + 1`
+    if $CC -mlp64 -B$W/gdbin/ -o $W/gdprog $W/gd.o 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        got=`$W/gdprog`
+        rc=$?
+        if [ $rc -ne 0 ] || [ "$got" != "11 22" ]; then
+            echo "FAIL: dynamic-TLS program: exit $rc, output '$got', expected '11 22'"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: linking a program using general-dynamic TLS:"
+        cat $W/link.err
+        FAIL=1
+    fi
+fi
+
 # --- the linker stamps what built the file --------------------------------
 # Which linker produced a binary is the first question asked when one is
 # suspected of building it wrong. The stamp is in the platform's `what`

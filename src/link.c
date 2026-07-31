@@ -1058,6 +1058,19 @@ int hld_alloc_linkage(hld_link *L)
                     want_dlt = 1;
                     dlt_kind = HLD_DLT_TPREL;
                     break;
+                /*
+                 * General dynamic: two slots, module and offset, which the
+                 * code hands to __tls_get_addr. In a program both are known
+                 * here — it is its own module and nothing can interpose.
+                 */
+                case R_IA64_LTOFF_DTPMOD22:
+                    want_dlt = 1;
+                    dlt_kind = HLD_DLT_DTPMOD;
+                    break;
+                case R_IA64_LTOFF_DTPREL22:
+                    want_dlt = 1;
+                    dlt_kind = HLD_DLT_DTPREL;
+                    break;
                 case R_IA64_LTOFF_FPTR22:
                 case R_IA64_LTOFF_FPTR64I:
                 case R_IA64_LTOFF_FPTR32MSB:
@@ -1098,7 +1111,8 @@ int hld_alloc_linkage(hld_link *L)
                     continue;
                 }
                 if (want_opd) dlt_kind = HLD_DLT_FPTR;
-                if (dlt_kind == HLD_DLT_TPREL && g
+                if ((dlt_kind == HLD_DLT_TPREL || dlt_kind == HLD_DLT_DTPMOD
+                     || dlt_kind == HLD_DLT_DTPREL) && g
                     && g->kind == HLD_SYM_IMPORT) {
                     lerr(L, "thread-local `%s' is defined in a shared library;"
                             " hld cannot resolve that yet", nm, NULL);
@@ -1224,6 +1238,10 @@ int hld_build_contents(hld_link *L)
                 v = d ? L->opdsec->addr + d->slot : 0;
             } else if (l->kind == HLD_DLT_TPREL) {
                 v = target_addr(l->g, l->in, l->off) - L->tls_base;
+            } else if (l->kind == HLD_DLT_DTPMOD) {
+                v = ~(uint64_t)0;          /* this module, as HP ld writes it */
+            } else if (l->kind == HLD_DLT_DTPREL) {
+                v = target_addr(l->g, l->in, l->off) - L->tls_base;
             } else {
                 v = target_addr(l->g, l->in, l->off);
             }
@@ -1331,6 +1349,34 @@ int hld_relocate(hld_link *L)
                     ent = dlt_get(L, tg, tin, toff, HLD_DLT_TPREL);
                     if (!ent) { lerr(L, "out of memory", NULL, NULL); goto rfail; }
                     V = L->dltsec->addr + ent->slot - L->gp;
+                    break;
+
+                case R_IA64_LTOFF_DTPMOD22:
+                    ent = dlt_get(L, tg, tin, toff, HLD_DLT_DTPMOD);
+                    if (!ent) { lerr(L, "out of memory", NULL, NULL); goto rfail; }
+                    V = L->dltsec->addr + ent->slot - L->gp;
+                    break;
+
+                case R_IA64_LTOFF_DTPREL22:
+                    ent = dlt_get(L, tg, tin, toff, HLD_DLT_DTPREL);
+                    if (!ent) { lerr(L, "out of memory", NULL, NULL); goto rfail; }
+                    V = L->dltsec->addr + ent->slot - L->gp;
+                    break;
+
+                /* The same two quantities, written straight into data. */
+                case R_IA64_DTPMOD64MSB:
+                case R_IA64_DTPMOD64LSB:
+                    V = ~(uint64_t)0;
+                    break;
+
+                case R_IA64_DTPREL14:
+                case R_IA64_DTPREL22:
+                case R_IA64_DTPREL64I:
+                case R_IA64_DTPREL32MSB:
+                case R_IA64_DTPREL32LSB:
+                case R_IA64_DTPREL64MSB:
+                case R_IA64_DTPREL64LSB:
+                    V = S - L->tls_base;
                     break;
 
                 case R_IA64_LTOFF22:

@@ -120,6 +120,15 @@ typedef struct hld_archive {
 #define HLD_DLT_PLAIN 0           /* the target's address */
 #define HLD_DLT_FPTR  1           /* the address of its descriptor */
 #define HLD_DLT_TPREL 2           /* its offset from the thread pointer */
+/*
+ * The general-dynamic pair: the module owning the variable, and its offset
+ * within that module's thread-local block. Code loads both and calls
+ * __tls_get_addr. For a program's own thread-local data the platform's
+ * linker writes -1 as the module — measured, not assumed — and the offset
+ * counts from the same base as a TPREL.
+ */
+#define HLD_DLT_DTPMOD 3
+#define HLD_DLT_DTPREL 4
 
 typedef struct lnkent {
     struct hld_gsym *g;       /* global target, or NULL for a local one */
