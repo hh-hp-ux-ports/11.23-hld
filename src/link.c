@@ -513,6 +513,20 @@ static const char *const hld_linker_symbols[] = {
     NULL
 };
 
+/*
+ * Is this a name the linker defines for itself? Such a symbol describes this
+ * module's own layout, so it must never be resolved to a shared library that
+ * exports the same name -- the program would read another module's addresses.
+ */
+int hld_is_linker_symbol(const char *name)
+{
+    const char *const *n;
+
+    for (n = hld_linker_symbols; *n; n++)
+        if (strcmp(*n, name) == 0) return 1;
+    return 0;
+}
+
 int hld_predefine_symbols(hld_link *L)
 {
     const char *const *n;

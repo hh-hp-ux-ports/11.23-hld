@@ -262,7 +262,10 @@ static void reladyn_add(hld_link *L, uint64_t where, uint32_t dynidx,
     uint8_t *rp;
 
     if (!L->reladynsec || !L->reladynsec->data) return;
-    if ((L->nreladyn + 1) * RELA64_SIZE > L->reladynsec->size) return;
+    if ((L->nreladyn + 1) * RELA64_SIZE > L->reladynsec->size) {
+        L->reladyn_overflow = 1;   /* reported by the caller; never silent */
+        return;
+    }
     rp = L->reladynsec->data + L->nreladyn * RELA64_SIZE;
     st64(rp + 0, where);
     st64(rp + 8, ELF64_R_INFO(dynidx, type));
@@ -374,12 +377,14 @@ int hld_fill_dynamic(hld_link *L)
 
     /* Import descriptors, their relocations, and the call stubs. */
     if (L->nimports) {
+        uint64_t nfilled = 0;
         for (h = 0; h < HLD_SYMHASH; h++)
             for (g = L->hash[h]; g; g = g->next) {
                 uint64_t plt_addr;
                 uint8_t *sp;
 
                 if (g->kind != HLD_SYM_IMPORT) continue;
+                nfilled++;
                 plt_addr = L->pltsec->addr + g->plt_slot;
 
                 /*
@@ -408,6 +413,18 @@ int hld_fill_dynamic(hld_link *L)
                 }
                 g->value = L->stubsec->addr + g->stub_off;  /* calls go here */
             }
+        /*
+         * A descriptor left unwritten is a call that jumps to zero, and a
+         * hole in the relocation array the loader rejects outright. It can
+         * only happen if a symbol stopped being an import after the linkage
+         * table was sized, which is this linker's mistake, not a bad input.
+         */
+        if (nfilled != L->nimports) {
+            snprintf(L->err, HLD_ERRSZ,
+                     "internal: %llu import descriptors reserved, %llu written",
+                     U(L->nimports), U(nfilled));
+            return -1;
+        }
     }
 
     if (L->dynamicsec->data) {
@@ -444,7 +461,21 @@ int hld_fill_dynamic(hld_link *L)
         DYN(DT_SYMTAB, L->dynsymsec->addr);
         DYN(DT_STRSZ, L->dynstrsec->size);
         DYN(DT_SYMENT, SYM64_SIZE);
-        if (L->reladynsec) {
+        /*
+     * Advertise exactly the relocations that were written. Reserving more
+     * than are used would otherwise leave zeroed entries in the array, and
+     * the loader reads those as relocation type 0 and refuses the image.
+     */
+    if (L->reladynsec) {
+        if (L->reladyn_overflow) {
+            snprintf(L->err, HLD_ERRSZ,
+                     "internal: more dynamic relocations than the %llu reserved",
+                     U(L->reladynsec->size / RELA64_SIZE));
+            return -1;
+        }
+        L->reladynsec->size = (uint64_t)L->nreladyn * RELA64_SIZE;
+    }
+    if (L->reladynsec) {
             /*
              * Advertise the relocations once, through DT_RELA only.
              * Naming the same array again as DT_JMPREL — which is what the
@@ -530,6 +561,7 @@ int hld_add_libpath(hld_link *L, const char *dir)
     L->libpaths[L->nlibpaths++] = (char *)dir;
     return 0;
 }
+
 
 /*
  * Resolve -lNAME against the -L list. Each directory is tried in turn for the
@@ -741,6 +773,14 @@ int hld_bind_imports(hld_link *L)
             dsosym *s;
 
             if (g->kind != HLD_SYM_UNDEF) continue;
+            /*
+             * `__gp', `_end' and the rest name this module's own layout.
+             * A library built by this linker exports them, so without this
+             * a program would import one, be given a descriptor in the
+             * linkage table, and then have the symbol defined locally at
+             * layout after all -- leaving that descriptor unwritten.
+             */
+            if (hld_is_linker_symbol(g->name)) continue;
             s = dso_lookup(L, g->name, &d);
             if (!s) continue;
             g->kind = HLD_SYM_IMPORT;

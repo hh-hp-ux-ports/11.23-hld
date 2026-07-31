@@ -26,6 +26,9 @@ fi
 
 # An assembler for the startup fixture.
 [ -f tests/local.conf ] && . tests/local.conf
+# A local.conf carried over from another machine names a tool that is not here;
+# fall back to probing rather than reporting nothing was found.
+[ -n "$XAS" ] && [ ! -x "$XAS" ] && XAS=
 if [ -z "$XAS" ]; then
     for cand in /opt/binutils/bin/as /opt/gnu/binutils2461/bin/as; do
         [ -x "$cand" ] && { XAS=$cand; break; }
@@ -263,6 +266,7 @@ extern int *lib_addr(void);
 extern int lib_value(void);
 int main(void) { return (*lib_addr() == lib_value()) ? lib_value() : 1; }
 CEOF
+$CC -mlp64 -c $W/shmain.c -o $W/shmain.o 2> $W/cc.err
 if $CC -mlp64 -fPIC -c $W/shlib.c -o $W/shlib.o 2> $W/cc.err; then
     CHECKS=`expr $CHECKS + 1`
     if $HLD -b -o $W/libhldtest.so $W/shlib.o 2> $W/link.err; then

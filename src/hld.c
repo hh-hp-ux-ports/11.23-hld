@@ -196,8 +196,16 @@ int main(int argc, char **argv)
     if (hld_add_ident(&L) < 0) goto fail;
     if (hld_link_millicode(&L) < 0) goto fail;
     if (hld_allocate_commons(&L) < 0) goto fail;
-    if (hld_bind_imports(&L) < 0) goto fail;
+    /*
+     * The linker's own symbols are established before any library is
+     * consulted. They name this module's layout -- `_end', `__gp', `_etext'
+     * -- so a definition of them must never be taken from a shared library
+     * that happens to export the same name: that binds the program to
+     * another module's addresses, and the descriptor reserved for the import
+     * is left unwritten once layout defines the symbol locally after all.
+     */
     if (hld_predefine_symbols(&L) < 0) goto fail;
+    if (hld_bind_imports(&L) < 0) goto fail;
     if (hld_alloc_unwind(&L) < 0) goto fail;
     if (hld_alloc_linkage(&L) < 0) goto fail;
     if (hld_alloc_dynamic(&L) < 0) goto fail;
