@@ -178,6 +178,23 @@ CEOF
     fi
 fi
 
+# --- the linker stamps what built the file --------------------------------
+# Which linker produced a binary is the first question asked when one is
+# suspected of building it wrong. The stamp is in the platform's `what`
+# format, so `what` reports it for anything hld linked.
+CHECKS=`expr $CHECKS + 1`
+if strings $W/hello 2>/dev/null | grep '@(#)hld ' > /dev/null 2>&1; then :; else
+    echo "FAIL: the linked program carries no linker identification"
+    FAIL=1
+fi
+if [ -x /usr/bin/what ]; then
+    CHECKS=`expr $CHECKS + 1`
+    if /usr/bin/what $W/hello 2>/dev/null | grep 'hld ' > /dev/null 2>&1; then :; else
+        echo "FAIL: what(1) does not report the linker that built it"
+        FAIL=1
+    fi
+fi
+
 # --- shared library output ------------------------------------------------
 # A library is loaded wherever the loader puts it, so every linkage-table
 # slot naming one of its own symbols is the loader's to fill, and hld must
