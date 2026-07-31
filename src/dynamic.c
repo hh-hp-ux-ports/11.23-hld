@@ -141,6 +141,33 @@ int hld_alloc_dynamic(hld_link *L)
         }
         L->soname_strx = dynstr_add(L, L->soname);
     }
+    /*
+     * Where the image should look for its libraries at run time. The
+     * platform's linker records the -L list here by default, and programs
+     * rely on it: a compiler linked without it cannot find the libraries it
+     * was built against and dies before main with "Unable to find library".
+     * +b names a directory explicitly, ahead of those defaults;
+     * +nodefaultrpath suppresses them, as it does there.
+     */
+    if (L->nrpaths || (!L->no_runpath && L->nlibpaths)) {
+        size_t k, n = 0, ndef = L->no_runpath ? 0 : L->nlibpaths;
+        char *rp;
+        for (k = 0; k < L->nrpaths; k++)  n += strlen(L->rpaths[k]) + 1;
+        for (k = 0; k < ndef; k++)        n += strlen(L->libpaths[k]) + 1;
+        rp = malloc(n + 1);
+        if (!rp) return -1;
+        rp[0] = 0;
+        for (k = 0; k < L->nrpaths; k++) {
+            if (rp[0]) strcat(rp, ":");
+            strcat(rp, L->rpaths[k]);
+        }
+        for (k = 0; k < ndef; k++) {
+            if (rp[0]) strcat(rp, ":");
+            strcat(rp, L->libpaths[k]);
+        }
+        L->runpath_strx = dynstr_add(L, rp);
+        free(rp);
+    }
     for (d = L->dsos; d; d = d->next)
         if (d->needed && !d->indirect) d->strx = dynstr_add(L, d->soname);
     for (h = 0; h < HLD_SYMHASH; h++)
@@ -220,7 +247,7 @@ int hld_alloc_dynamic(hld_link *L)
 
     o = osec_get(L, ".dynamic", SHT_DYNAMIC, SHF_ALLOC);
     if (!o) return -1;
-    L->ndyntags = 13;                  /* the always-present set + DT_SONAME */
+    L->ndyntags = 14;          /* the always-present set + DT_SONAME, RUNPATH */
     for (d = L->dsos; d; d = d->next) if (d->needed) L->ndyntags++;
     if (nimp) L->ndyntags += 3;        /* PLT reserve, dld flags, load map */
     if (L->reladynsec) L->ndyntags += 3;   /* RELA, RELASZ, RELAENT */
@@ -449,6 +476,7 @@ int hld_fill_dynamic(hld_link *L)
         for (d = L->dsos; d; d = d->next)
             if (d->needed && !d->indirect) DYN(DT_NEEDED, d->strx);
         if (L->shared) DYN(DT_SONAME, L->soname_strx);
+        if (L->runpath_strx) DYN(DT_RUNPATH, L->runpath_strx);
         /*
          * Ask for immediate binding: hld does not emit the lazy-resolution
          * trampoline, so every import must be bound before control reaches
@@ -559,6 +587,20 @@ int hld_add_libpath(hld_link *L, const char *dir)
         L->libpaths_cap = nc;
     }
     L->libpaths[L->nlibpaths++] = (char *)dir;
+    return 0;
+}
+
+/* +b: a directory the loader should search, ahead of the -L defaults. */
+int hld_add_rpath(hld_link *L, const char *dir)
+{
+    if (L->nrpaths == L->rpaths_cap) {
+        size_t nc = L->rpaths_cap ? L->rpaths_cap * 2 : 4;
+        char **np = realloc(L->rpaths, nc * sizeof *np);
+        if (!np) return -1;
+        L->rpaths = np;
+        L->rpaths_cap = nc;
+    }
+    L->rpaths[L->nrpaths++] = (char *)dir;
     return 0;
 }
 

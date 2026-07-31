@@ -31,6 +31,8 @@ static void usage(void)
         "               shared_archive or default\n"
         "  -b, -shared  produce a shared library (ET_DYN) instead of a program\n"
         "  +h NAME      the name it records for itself (DT_SONAME); -soname too\n"
+        "  +b DIRS      where the loader should search at run time (DT_RUNPATH);\n"
+        "               the -L list is recorded too unless +nodefaultrpath\n"
         "  --start-group ... --end-group   re-search these archives until\n"
         "               nothing further is pulled in\n"
         "  -V           print version\n"
@@ -65,10 +67,21 @@ int main(int argc, char **argv)
                 L.soname = argv[++i];       /* the name recorded in DT_SONAME */
                 continue;
             }
-            if (strcmp(a, "+Accept") == 0 || strcmp(a, "+b") == 0
-                || strcmp(a, "+e") == 0
-                || strcmp(a, "+nodefaultrpath") == 0) {
-                if (strcmp(a, "+nodefaultrpath") != 0 && i + 1 < argc) ++i;
+            /*
+             * +b is how the compiler driver passes -rpath here. Ignoring it
+             * would leave the image searching only the -L defaults, which is
+             * not what the caller asked for.
+             */
+            if (strcmp(a, "+b") == 0 && i + 1 < argc) {
+                if (hld_add_rpath(&L, argv[++i]) < 0) goto fail;
+                continue;
+            }
+            if (strcmp(a, "+nodefaultrpath") == 0) {
+                L.no_runpath = 1;    /* do not record the -L list in the image */
+                continue;
+            }
+            if (strcmp(a, "+Accept") == 0 || strcmp(a, "+e") == 0) {
+                if (i + 1 < argc) ++i;
                 continue;
             }
             /* diagnostic-only switches: harmless to accept and ignore */

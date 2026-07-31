@@ -267,6 +267,7 @@ extern int lib_value(void);
 int main(void) { return (*lib_addr() == lib_value()) ? lib_value() : 1; }
 CEOF
 $CC -mlp64 -c $W/shmain.c -o $W/shmain.o 2> $W/cc.err
+$CC -mlp64 -c $W/shmain.c -o $W/shmain.o 2> $W/cc.err
 if $CC -mlp64 -fPIC -c $W/shlib.c -o $W/shlib.o 2> $W/cc.err; then
     CHECKS=`expr $CHECKS + 1`
     if $HLD -b -o $W/libhldtest.so $W/shlib.o 2> $W/link.err; then
@@ -298,6 +299,61 @@ if $CC -mlp64 -fPIC -c $W/shlib.c -o $W/shlib.o 2> $W/cc.err; then
     else
         echo "FAIL: hld could not produce a shared library:"; cat $W/link.err
         FAIL=1
+    fi
+fi
+
+# --- run-time library search path -----------------------------------------
+# The platform's linker records the -L list in the image, and programs depend
+# on it: without it a binary that linked cleanly against a library outside the
+# default directories cannot find it at startup and dies before main. Nothing
+# in the link itself reveals this, so the check has to be a run with the
+# environment deliberately empty.
+if [ -f $W/libhldtest.so ]; then
+    ADIR=`pwd`/$W
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -dynamic -e _start -o $W/rpprog $W/crt_min.o $W/shmain.o \
+            -L$ADIR -lhldtest -L$LIBDIR -lc 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        if $RE -d $W/rpprog | grep RUNPATH > /dev/null 2>&1; then :; else
+            echo "FAIL: no DT_RUNPATH, so the -L list was not recorded"
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        SHLIB_PATH= LD_LIBRARY_PATH= export SHLIB_PATH LD_LIBRARY_PATH
+        $W/rpprog
+        rc=$?
+        unset SHLIB_PATH LD_LIBRARY_PATH
+        if [ $rc -ne 7 ]; then
+            echo "FAIL: with no SHLIB_PATH set the program gave $rc, expected 7"
+            echo "      (the loader could not find the library it was linked against)"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: linking against a library outside the default path:"
+        cat $W/link.err
+        FAIL=1
+    fi
+    # +b names a directory explicitly, ahead of the -L defaults; and
+    # +nodefaultrpath drops the defaults, as it does on the platform's linker.
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +b /run/first -o $W/rp2.so $W/shlib.o 2> $W/link.err; then
+        got=`$RE -d $W/rp2.so | grep RUNPATH`
+        case "$got" in
+            *"/run/first"*) : ;;
+            *) echo "FAIL: +b did not reach DT_RUNPATH: $got"; FAIL=1 ;;
+        esac
+    else
+        echo "FAIL: +b was rejected:"; cat $W/link.err; FAIL=1
+    fi
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +nodefaultrpath -L/should/not/appear -o $W/rp3.so $W/shlib.o \
+            2> $W/link.err; then
+        if $RE -d $W/rp3.so | grep RUNPATH > /dev/null 2>&1; then
+            echo "FAIL: +nodefaultrpath still recorded the -L list"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: +nodefaultrpath was rejected:"; cat $W/link.err; FAIL=1
     fi
 fi
 

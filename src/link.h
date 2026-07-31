@@ -237,6 +237,10 @@ typedef struct {
     int shared;               /* -b: emit a shared library, not an executable */
     const char *soname;       /* +h, or the output's basename */
     uint32_t soname_strx;
+    int no_runpath;           /* +nodefaultrpath */
+    char **rpaths;            /* +b, searched ahead of the -L list */
+    size_t nrpaths, rpaths_cap;
+    uint32_t runpath_strx;
     int reladyn_overflow;
     hld_dso *dsos, **dso_tail;
     size_t ndsos, nimports;
@@ -292,6 +296,7 @@ int  hld_link_millicode(hld_link *L);
 /* dynamic.c */
 int  hld_add_dso(hld_link *L, const char *path);
 int  hld_add_libpath(hld_link *L, const char *dir);
+int  hld_add_rpath(hld_link *L, const char *dir);
 int  hld_find_library(hld_link *L, const char *name, hld_archive **ar_out);
 int  hld_predefine_symbols(hld_link *L);
 int  hld_is_linker_symbol(const char *name);
