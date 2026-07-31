@@ -357,6 +357,71 @@ if [ -f $W/libhldtest.so ]; then
     fi
 fi
 
+# --- a library named on the command line is recorded ----------------------
+# Recording only the libraries symbols are actually drawn from is --as-needed,
+# which neither reference linker does by default. It breaks transitively: a
+# library whose own RUNPATH cannot reach its dependencies is resolved through
+# the executable's RUNPATH, and only while the executable names them itself.
+# The program here deliberately calls nothing in the library it links against.
+if [ -f $W/libhldtest.so ]; then
+    CHECKS=`expr $CHECKS + 1`
+    cat > $W/noref.c <<'CEOF'
+int main(void) { return 0; }
+CEOF
+    if $CC -mlp64 -c $W/noref.c -o $W/noref.o 2> $W/cc.err; then
+        CHECKS=`expr $CHECKS + 1`
+        if $HLD -dynamic -e _start -o $W/noref $W/crt_min.o $W/noref.o \
+                -L`pwd`/$W -lhldtest -L$LIBDIR -lc 2> $W/link.err; then
+            CHECKS=`expr $CHECKS + 1`
+            if $RE -d $W/noref | grep libhldtest > /dev/null 2>&1; then :; else
+                echo "FAIL: a library named on the command line was not recorded"
+                echo "      as DT_NEEDED because no symbol was drawn from it"
+                FAIL=1
+            fi
+        else
+            echo "FAIL: linking against an unreferenced library:"
+            cat $W/link.err
+            FAIL=1
+        fi
+    fi
+fi
+
+# --- -l finds the platform's own shared-library suffix --------------------
+# `.sl' is this platform's shared-library suffix and libraries still ship with
+# only that name (GMP is one). Missing it does not fail the link: -lfoo falls
+# through to libfoo.a and links that library statically instead, so the same
+# command line silently builds a different program than the platform's linker
+# does. The fixture puts both forms in one directory, archive included, and
+# the shared one must win.
+if [ -f $W/libhldtest.so ]; then
+    CHECKS=`expr $CHECKS + 1`
+    rm -rf $W/sldir; mkdir -p $W/sldir
+    # Built, not copied: a library records the name it calls itself, and a
+    # copy would still name the original.
+    $HLD -b +h libsltest.sl -o $W/sldir/libsltest.sl $W/shlib.o 2> $W/link.err
+    if $HLD -dynamic -e _start -o $W/slprog $W/crt_min.o $W/shmain.o \
+            -L`pwd`/$W/sldir -lsltest -L$LIBDIR -lc 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        if $RE -d $W/slprog | grep NEEDED > /dev/null 2>&1; then :; else
+            echo "FAIL: -lsltest did not resolve to libsltest.sl"
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        SHLIB_PATH= LD_LIBRARY_PATH= export SHLIB_PATH LD_LIBRARY_PATH
+        $W/slprog
+        rc=$?
+        unset SHLIB_PATH LD_LIBRARY_PATH
+        if [ $rc -ne 7 ]; then
+            echo "FAIL: the program linked against a .sl gave $rc, expected 7"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: -l could not find a library named lib<name>.sl:"
+        cat $W/link.err
+        FAIL=1
+    fi
+fi
+
 # --- debug information ----------------------------------------------------
 # Debug sections are not loaded, but dropping them is silent: the link
 # succeeds and the result simply cannot be debugged. They have to be carried

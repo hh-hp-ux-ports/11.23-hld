@@ -645,15 +645,31 @@ int hld_find_library(hld_link *L, const char *name, hld_archive **ar_out)
                     return hld_archive_search(L, ar, NULL);
                 }
             } else {
+                /*
+                 * The shared forms, in the order the platform's linker
+                 * tries them. `.sl' is this platform's own shared-library
+                 * suffix and plenty of libraries still carry only it --
+                 * GMP ships as libgmp.sl here. Missing it does not fail the
+                 * link, it quietly falls through to the archive and links
+                 * that library statically instead, which is a different
+                 * program from the one the same command line builds with
+                 * the platform's linker.
+                 */
+                static const char *const forms[] = {
+                    "%s/lib%s.so",      /* the usual name */
+                    "%s/lib%s.so.1",    /* HP names the C library libc.so.1 */
+                    "%s/lib%s.sl",      /* the platform's own suffix */
+                    "%s/lib%s.sl.1",
+                    NULL
+                };
+                const char *const *fm;
+
                 if (!allow_shared) continue;
-                snprintf(path, sizeof path, "%s/lib%s.so", L->libpaths[i], name);
-                f = fopen(path, "rb");
-                if (f) { fclose(f); return hld_add_dso(L, path); }
-                /* HP names the C library libc.so.1 rather than libc.so */
-                snprintf(path, sizeof path, "%s/lib%s.so.1",
-                         L->libpaths[i], name);
-                f = fopen(path, "rb");
-                if (f) { fclose(f); return hld_add_dso(L, path); }
+                for (fm = forms; *fm; fm++) {
+                    snprintf(path, sizeof path, *fm, L->libpaths[i], name);
+                    f = fopen(path, "rb");
+                    if (f) { fclose(f); return hld_add_dso(L, path); }
+                }
             }
         }
     }
@@ -793,6 +809,18 @@ static int add_dso(hld_link *L, const char *path, int indirect)
             }
         }
     }
+
+    /*
+     * A library named on the command line is recorded as a dependency even
+     * if no symbol is drawn from it directly. Recording only the ones we
+     * take symbols from is --as-needed, which neither reference linker does
+     * by default, and it breaks transitively: a library whose own RUNPATH
+     * cannot reach its dependencies is resolved through the executable's
+     * RUNPATH only while the executable names them itself. Dropping one
+     * leaves an image that links cleanly and dies at startup with
+     * "Unable to find library".
+     */
+    if (!indirect) d->needed = 1;
 
     /*
      * Bind what is undefined right now, at this library's position on the
