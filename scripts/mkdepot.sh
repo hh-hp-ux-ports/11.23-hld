@@ -23,7 +23,17 @@
 
 set -e
 
-VERSION=${1:-0.1}
+# src/version.h is the single source of truth; the binary stamps the same
+# string into everything it links, so a depot cannot claim a version that
+# does not match the linker inside it.
+VERSION=${1:-}
+if [ -z "$VERSION" ]; then
+    VERSION=`sed -n 's/^#define HLD_VERSION "\(.*\)"/\1/p' src/version.h`
+fi
+if [ -z "$VERSION" ]; then
+    echo "mkdepot: cannot read HLD_VERSION from src/version.h" >&2
+    exit 1
+fi
 OUT=${2:-build/hld-$VERSION-ia64-11.23.depot}
 STAGE=build/depotstage
 PSF=build/hld.psf

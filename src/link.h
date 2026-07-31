@@ -6,6 +6,7 @@
 #define HLD_LINK_H
 
 #include "elf64.h"
+#include "version.h"
 
 /* HP-UX/IPF LP64 address space (docs/format-notes.md). */
 #define HLD_TEXT_BASE 0x4000000000000000ULL
@@ -242,6 +243,7 @@ typedef struct {
     size_t dynstr_len, dynstr_cap;
     uint32_t ndynsym, nbucket, ndyntags, nphdr;
     uint64_t reserve_off, loadmap_off;
+    osec *commentsec;         /* the stamp saying which linker built this */
     osec *interpsec, *dynsymsec, *dynstrsec, *hashsec, *dynamicsec, *reservesec;
 
     /* options */
@@ -284,6 +286,7 @@ int  hld_find_library(hld_link *L, const char *name, hld_archive **ar_out);
 int  hld_predefine_symbols(hld_link *L);
 int  hld_bind_imports(hld_link *L);
 int  hld_alloc_dynamic(hld_link *L);
+int  hld_add_ident(hld_link *L);
 int  hld_alloc_stubs(hld_link *L);
 int  hld_dlt_needs_loader(hld_link *L, const lnkent *l);
 int  hld_write_stubs(hld_link *L);

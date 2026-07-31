@@ -18,7 +18,7 @@ BUILD   = build
 
 READER  = src/elfread.c
 LINKSRC = src/hld.c src/link.c src/write.c src/dynamic.c src/archive.c src/stubs.c src/ia64_patch.c $(READER)
-HDRS    = src/elf64.h src/port.h src/ia64_patch.h src/link.h
+HDRS    = src/elf64.h src/port.h src/ia64_patch.h src/link.h src/version.h
 
 all: $(BUILD)/hld $(BUILD)/hld-readelf $(BUILD)/patch_harness
 
@@ -47,10 +47,9 @@ check: all
 # An SD depot for swinstall. Must be built on HP-UX (swpackage lives there);
 # works as an ordinary user. Ships the binaries, an `ld` alias that takes
 # precedence over the system linker on PATH, and the corresponding source.
-VERSION = 0.9.2
-
+# The version lives in src/version.h; mkdepot.sh reads it from there.
 package: all
-	sh scripts/mkdepot.sh $(VERSION)
+	sh scripts/mkdepot.sh
 
 clean:
 	rm -rf $(BUILD)

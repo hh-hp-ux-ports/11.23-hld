@@ -82,6 +82,24 @@ int hld_add_object(hld_link *L, const char *path)
     return hld_input_object(L, e);
 }
 
+/*
+ * Stamp the output with which linker built it. Not loaded — it costs the
+ * running program nothing — but present in the file, in the platform's own
+ * `what` format, so `what <binary>` answers the question directly. Which
+ * linker produced a binary is the first thing anyone asks when one is
+ * suspected of building it wrong, and timestamps are a poor substitute.
+ */
+int hld_add_ident(hld_link *L)
+{
+    osec *o = osec_get(L, ".comment", SHT_PROGBITS, 0);
+
+    if (!o) { lerr(L, "out of memory", NULL, NULL); return -1; }
+    o->align = 1;
+    o->size = strlen(HLD_IDENT) + 1;
+    L->commentsec = o;
+    return 0;
+}
+
 /* ---- output sections --------------------------------------------------- */
 
 static osec *osec_find(hld_link *L, const char *name)
@@ -127,6 +145,23 @@ osec *osec_get(hld_link *L, const char *name, uint32_t type, uint64_t flags)
  * seen except that NOBITS is forced last (it has no file image). The text
  * segment holds alloc sections without SHF_WRITE, the data segment the rest.
  */
+/*
+ * Is this address inside code the image actually maps? A branch is only
+ * meaningful if it is. Checking the encoded displacement is not enough: a
+ * wrong target that happens to land within reach encodes perfectly well and
+ * faults only when the call is taken, which may be days of work later.
+ */
+static int addr_is_code(hld_link *L, uint64_t a)
+{
+    osec *o;
+    for (o = L->osecs; o; o = o->next)
+        if ((o->flags & SHF_ALLOC) && (o->flags & SHF_EXECINSTR)
+            && o->type != SHT_NOBITS && o->size
+            && a >= o->addr && a < o->addr + o->size)
+            return 1;
+    return 0;
+}
+
 static int sec_is_text(uint64_t flags)
 {
     return (flags & SHF_ALLOC) && !(flags & SHF_WRITE);
@@ -1152,6 +1187,9 @@ int hld_build_contents(hld_link *L)
         }
     }
 
+    if (L->commentsec && L->commentsec->data)
+        memcpy(L->commentsec->data, HLD_IDENT, strlen(HLD_IDENT) + 1);
+
     /*
      * Fill the linkage tables now that every address is final. A function
      * descriptor is {entry point, gp}; a DLT slot holds either a plain
@@ -1403,6 +1441,20 @@ int hld_relocate(hld_link *L)
                             goto rfail;
                         }
                         S = hld_stub_addr(L, sb);
+                    }
+                    /*
+                     * Whatever it resolved to, a call has to land in code.
+                     * A symbol that turns out to name data, or a stub whose
+                     * address came out wrong, both produce a branch that
+                     * encodes cleanly and dies when taken.
+                     */
+                    if (!addr_is_code(L, S)) {
+                        snprintf(L->err, HLD_ERRSZ,
+                                 "%s: call to `%s' resolves to 0x%llx, which is "
+                                 "not in any code section (call site 0x%llx)",
+                                 e->path, sname[0] ? sname : "a local target",
+                                 U(S), U(P));
+                        goto rfail;
                     }
                     V = S - P;
                     break;

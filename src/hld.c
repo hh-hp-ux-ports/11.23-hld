@@ -96,7 +96,7 @@ int main(int argc, char **argv)
         if (strcmp(a, "-dynamic") == 0) { L.dynamic = 1; continue; }
         if (strcmp(a, "-v") == 0) { L.verbose = 1; continue; }
         if (strcmp(a, "-V") == 0) {
-            printf("hld — HP-UX 11.23 IA-64 LP64 linker (foundation)\n");
+            printf("%s\n", HLD_IDENT + 4);   /* past the `what` marker */
             return 0;
         }
         if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) { usage(); return 0; }
@@ -193,6 +193,7 @@ int main(int argc, char **argv)
 
     if (!ninputs) { usage(); return 1; }
 
+    if (hld_add_ident(&L) < 0) goto fail;
     if (hld_link_millicode(&L) < 0) goto fail;
     if (hld_allocate_commons(&L) < 0) goto fail;
     if (hld_bind_imports(&L) < 0) goto fail;
