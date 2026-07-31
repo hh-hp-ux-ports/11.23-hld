@@ -135,6 +135,31 @@ static void relayout_code(hld_link *L)
  * one-function sections and for a single large one. Called before every
  * layout; it only adds, and does nothing once the spacing holds.
  */
+/* Splice a new island into `o`'s list ahead of `at` (at the end if NULL). */
+static int island_insert(hld_link *L, osec *o, isec *prev, isec *at)
+{
+    stubisl *is = calloc(1, sizeof *is);
+    isec *run = calloc(1, sizeof *run);
+
+    if (!is || !run) { free(is); free(run); return -1; }
+    run->out = o;
+    run->island = is;
+    is->at = run;
+
+    run->next = at;
+    if (prev) prev->next = run;
+    else o->first = run;
+    if (!at) o->tail = &run->next;
+
+    {                                     /* islands in address order */
+        stubisl **pp = &L->islands;
+        while (*pp) pp = &(*pp)->next;
+        *pp = is;
+    }
+    L->nislands++;
+    return 0;
+}
+
 static int place_islands(hld_link *L)
 {
     osec *o;
@@ -149,30 +174,27 @@ static int place_islands(hld_link *L)
         for (in = o->first; in; prev = in, in = in->next) {
             if (in->island) { since = 0; first = 0; continue; }
             if (first || since + run_size(in) > ZONE_SIZE) {
-                stubisl *is = calloc(1, sizeof *is);
-                isec *run = calloc(1, sizeof *run);
-
-                if (!is || !run) { free(is); free(run); return -1; }
-                run->out = o;
-                run->island = is;
-                is->at = run;
-
-                run->next = in;               /* splice ahead of this run */
-                if (prev) prev->next = run;
-                else o->first = run;
-
-                {                             /* islands in address order */
-                    stubisl **pp = &L->islands;
-                    while (*pp) pp = &(*pp)->next;
-                    *pp = is;
-                }
-                L->nislands++;
-                prev = run;
+                if (island_insert(L, o, prev, in) < 0) return -1;
+                prev = in;                /* the loop re-sets it anyway */
                 since = 0;
                 first = 0;
                 added = 1;
             }
             since += run_size(in);
+        }
+        /*
+         * And one after the last contribution when the tail of the section
+         * has run long. An input section cannot be split, so a single large
+         * one — 20 MB of padding inside one object, say — can only be given
+         * an island at each end; without the trailing one, a call sitting at
+         * its far end has nothing in reach behind it.
+         */
+        if (since > ZONE_SIZE) {
+            isec *last = o->first;
+            while (last && last->next) last = last->next;
+            if (island_insert(L, o, last, NULL) < 0) return -1;
+            since = 0;
+            added = 1;
         }
     }
     if (added) relayout_code(L);
@@ -180,10 +202,11 @@ static int place_islands(hld_link *L)
 }
 
 /*
- * The island nearest an address. Both the allocation pass and relocation ask
- * this, so they cannot disagree about which stub a call belongs to.
+ * The nearest island this call can actually branch to. Nearest alone is not
+ * enough: an island can be the closest one and still be out of reach, and a
+ * call has to be able to get there.
  */
-static stubisl *nearest_island(hld_link *L, uint64_t from)
+static stubisl *island_for_call(hld_link *L, uint64_t from)
 {
     stubisl *is, *best = NULL;
     uint64_t bestd = 0;
@@ -191,28 +214,38 @@ static stubisl *nearest_island(hld_link *L, uint64_t from)
     for (is = L->islands; is; is = is->next) {
         uint64_t a = island_addr(is);
         uint64_t d = a > from ? a - from : from - a;
+        if (!hld_branch_in_range(from, a)) continue;
         if (!best || d < bestd) { best = is; bestd = d; }
     }
     return best;
 }
 
+/*
+ * Any stub for this target that the call can reach will serve. Searching
+ * only the nearest island is what stopped this converging: putting a stub in
+ * moves every address after it, so the island that is nearest changes
+ * between passes, the previous pass's stub is not found where it is looked
+ * for, and a fresh one is added every pass. Reuse is what makes the set
+ * settle — a call that already has a stub in reach never needs another.
+ */
 stubent *hld_stub_find(hld_link *L, uint64_t from, hld_gsym *g, isec *in,
                        uint64_t off)
 {
-    stubisl *is = nearest_island(L, from);
+    stubisl *is;
     stubent *s;
 
-    if (!is) return NULL;
-    for (s = is->stubs; s; s = s->next)
-        if (s->g == g && s->in == in && s->off == off)
-            return s;
+    for (is = L->islands; is; is = is->next)
+        for (s = is->stubs; s; s = s->next)
+            if (s->g == g && s->in == in && s->off == off
+                && hld_branch_in_range(from, hld_stub_addr(L, s)))
+                return s;
     return NULL;
 }
 
 static int stub_add(hld_link *L, uint64_t from, hld_gsym *g, isec *in,
                     uint64_t off)
 {
-    stubisl *is = nearest_island(L, from);
+    stubisl *is = island_for_call(L, from);
     stubent *s, **pp;
 
     if (!is) return -1;
@@ -306,7 +339,11 @@ static long scan(hld_link *L)
                 if (hld_branch_in_range(from, to)) continue;
                 if (hld_stub_find(L, from, g, in, off)) continue;
                 if (stub_add(L, from, g, in, off) < 0) {
-                    snprintf(L->err, HLD_ERRSZ, "out of memory");
+                    snprintf(L->err, HLD_ERRSZ,
+                             "no place within reach of 0x%llx to put a "
+                             "long-branch stub for `%s' (an input section "
+                             "longer than a branch's reach cannot be split)",
+                             U(from), nm && nm[0] ? nm : "a local target");
                     free(syms); free(rel);
                     return -1;
                 }

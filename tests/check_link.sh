@@ -113,6 +113,29 @@ if [ -n "$doff" ]; then
     fi
 fi
 
+# --- a long call within ONE input section ---------------------------------
+# The filler here is inside the same section as caller and callee, not a
+# separate object. An input section cannot be split, so a stub island can
+# only go at its ends — and a call at the far end has nothing behind it in
+# reach unless one is placed after the section too. This shape also made the
+# stub set oscillate once: the search looked only in the island that was
+# nearest at that moment, and inserting a stub moves what is nearest, so
+# each pass failed to find the previous pass's stub and added another.
+CHECKS=`expr $CHECKS + 1`
+printf '\t.text\n\t.global inner_target\ninner_target:\n\tmov r8 = 42\n\tbr.ret.sptk.many b0\n\t.skip 0x1400000\n\t.global inner_caller\ninner_caller:\n\talloc r32 = ar.pfs, 0, 2, 0, 0\n\tmov r33 = b0\n\tbr.call.sptk.many b0 = inner_target\n\tmov b0 = r33\n\tmov ar.pfs = r32\n\tbr.ret.sptk.many b0\n' > $W/inner.s
+if $XAS -mlp64 -o $W/inner.o $W/inner.s 2> $W/as.err; then :; else
+    echo "FAIL: assembling the single-section far-call fixture:"; cat $W/as.err; exit 1
+fi
+CHECKS=`expr $CHECKS + 1`
+printf '\t.text\n\t.global _start\n_start:\n\talloc r32 = ar.pfs, 0, 1, 1, 0\n\t;;\n\tbr.call.sptk.many b0 = inner_caller\n\t;;\n\tmov r33 = r8\n\t;;\n\tbr.call.sptk.many b0 = _hld_exit\n\t;;\n' > $W/inner_start.s
+$XAS -mlp64 -o $W/inner_start.o $W/inner_start.s 2> $W/as.err
+if $HLD -e _start -o $W/innercall \
+        $W/inner_start.o $W/inner.o $W/exit_stub.o 2> $W/link.err; then :; else
+    echo "FAIL: a long call inside one input section:"
+    cat $W/link.err
+    FAIL=1
+fi
+
 # --- calls that cannot reach their target --------------------------------
 # A direct branch reaches 16 MB. With more text than that between caller and
 # callee the call cannot be encoded at all, and has to go through a stub
@@ -150,7 +173,7 @@ fi
 
 # On the target platform, run them: structure is only half the claim.
 if [ "`uname -s 2>/dev/null`" = "HP-UX" ] && [ "`uname -m 2>/dev/null`" = "ia64" ]; then
-    for t in exit42 multi gptest farcall; do
+    for t in exit42 multi gptest farcall innercall; do
         CHECKS=`expr $CHECKS + 1`
         $W/$t
         rc=$?
