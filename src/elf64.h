@@ -373,7 +373,7 @@ HLD_INLINE void stle64(uint8_t *p, uint64_t v)
     X(R_IA64_PCREL64I,        0x7b) \
     X(R_IA64_IPLTMSB,         0x80) \
     X(R_IA64_IPLTLSB,         0x81) \
-    X(R_IA64_EPLTMSB,         0x82) /* PROVISIONAL: HP export-PLT (obs. in libc, absent from GNU headers; pairs with DT_HP_EPLTREL) */ \
+    X(R_IA64_EPLTMSB,         0x82) /* HP export-PLT: 16-byte {entry, gp} descriptor, absent from GNU headers (see docs/format-notes.md) */ \
     X(R_IA64_EPLTLSB,         0x83) /* PROVISIONAL: LSB twin by pattern */ \
     X(R_IA64_COPY,            0x84) \
     X(R_IA64_SUB,             0x85) \

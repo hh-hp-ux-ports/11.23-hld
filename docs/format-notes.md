@@ -105,10 +105,31 @@ PCREL64I for long branches.
 **In linked outputs (dynamic):** R_IA64_IPLTMSB (0x80, function-descriptor import),
 R_IA64_DIR64MSB (0x26, DLT/data slots), R_IA64_FPTR64MSB (0x46, a descriptor the loader
 must make). One HP dynamic reloc type, **0x82**, appears in libc.so.1 and is absent from
-the public GNU relocation-numbering headers; it **writes a 16-byte `{entry, gp}`
-descriptor**, established by reading what the loader's own `.opd` holds at the addresses
-it names. It pairs positionally with `DT_HP_EPLTREL`, so an EPLT/export-descriptor form
-is the likely reading.
+the public GNU relocation-numbering headers (binutils 2.46.1 defines 0x80/0x81 IPLT,
+0x84 COPY, 0x86/0x87 LTOFF22X/LDXMOV — 0x82 and 0x83 are HP's). It **writes a 16-byte
+`{entry, gp}` descriptor**, and it pairs positionally with `DT_HP_EPLTREL`: an
+EPLT/export-descriptor form, the counterpart of IPLT for a module's *own* exported
+functions rather than its imports.
+
+That reading is now settled rather than likely:
+
+- It is present in **LP64** (ELF64-MSB) HP libraries, not only the ILP32 ones —
+  `libc.so.1` 131, `dld.so` 56, against 70 and 4 IPLTMSB respectively.
+- In `dld.so` all 56 sit at a **uniform 16-byte stride** in one contiguous run: an
+  `.opd` array with exactly one relocation per descriptor.
+- A competing reading — that 0x82 writes only the entry word and a neighbouring
+  `R_IA64_REL64MSB` supplies the gp — was **tested and refuted**. The counts are
+  suggestively equal (56 and 56), but **none** of the 56 EPLT sites has a REL64 at
+  offset+8; the REL64s form their own separate run. Equal counts, unrelated arrays.
+- Independently, reading a *live* process's memory on the target shows such a slot
+  holding an entry point followed by the module's own gp, both quadrant-tagged, and
+  treating the relocation as 8 bytes leaves the gp word zero — the callee then reads
+  every gp-relative datum from the wrong base.
+
+hld does not emit 0x82: it builds its own `.opd` and uses `FPTR64MSB` for descriptors
+the loader must construct. That works, but it is a divergence from what the platform's
+linker produces, and it is worth revisiting before shared-library output is called
+finished.
 
 ## What the kernel's loader actually requires (static executables)
 
