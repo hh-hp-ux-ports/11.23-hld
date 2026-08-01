@@ -355,7 +355,6 @@ if [ -f $W/libhldtest.so ]; then
     else
         echo "FAIL: +nodefaultrpath was rejected:"; cat $W/link.err; FAIL=1
     fi
-fi
 
 # --- a library named on the command line is recorded ----------------------
 # Recording only the libraries symbols are actually drawn from is --as-needed,
@@ -363,7 +362,6 @@ fi
 # library whose own RUNPATH cannot reach its dependencies is resolved through
 # the executable's RUNPATH, and only while the executable names them itself.
 # The program here deliberately calls nothing in the library it links against.
-if [ -f $W/libhldtest.so ]; then
     CHECKS=`expr $CHECKS + 1`
     cat > $W/noref.c <<'CEOF'
 int main(void) { return 0; }
@@ -384,7 +382,6 @@ CEOF
             FAIL=1
         fi
     fi
-fi
 
 # --- -l finds the platform's own shared-library suffix --------------------
 # `.sl' is this platform's shared-library suffix and libraries still ship with
@@ -393,7 +390,6 @@ fi
 # command line silently builds a different program than the platform's linker
 # does. The fixture puts both forms in one directory, archive included, and
 # the shared one must win.
-if [ -f $W/libhldtest.so ]; then
     CHECKS=`expr $CHECKS + 1`
     rm -rf $W/sldir; mkdir -p $W/sldir
     # Built, not copied: a library records the name it calls itself, and a

@@ -24,10 +24,38 @@
 /* The loader is named as a colon-separated search list. */
 static const char hld_interp[] = "/usr/lib/hpux64/uld.so:/usr/lib/hpux64/dld.so";
 
+/*
+ * The shared-library names -lNAME accepts, in the order the platform's linker
+ * tries them. `.sl' is this platform's own shared-library suffix and plenty of
+ * libraries still carry only it -- GMP ships as libgmp.sl here. Missing it does
+ * not fail the link: the search falls through to lib<name>.a and links that
+ * library statically instead, silently building a different program from the
+ * one the same command line builds with the platform's linker.
+ *
+ * Versioned names are reached through the unversioned symlink in the normal
+ * case; the two `.N' forms are for the libraries that ship without one. Real
+ * versions in the wild run .0, .1, .10, even .5.4.0 -- so these two are a
+ * convenience, not a complete enumeration.
+ */
+static const char *const hld_shared_forms[] = {
+    "%s/lib%s.so",      /* the usual name */
+    "%s/lib%s.so.1",    /* HP names the C library libc.so.1 */
+    "%s/lib%s.sl",      /* the platform's own suffix */
+    "%s/lib%s.sl.1",
+    NULL
+};
+
 /* Reserved for the loader's own use, named by DT_IA_64_PLT_RESERVE. */
 #define PLT_RESERVE_SIZE 24
 /* One word the loader fills with the address of its load map. */
 #define LOAD_MAP_SIZE     8
+
+/*
+ * The run-time search path is the +b directories followed by the -L list, so
+ * index them as one sequence rather than walking two vectors twice.
+ */
+#define RPATH_NTH(L, k, ndef) \
+    ((k) < (L)->nrpaths ? (L)->rpaths[(k)] : (L)->libpaths[(k) - (L)->nrpaths])
 
 /* Standard ELF symbol hash (the gABI function). */
 static uint32_t elf_hash(const char *name)
@@ -150,21 +178,21 @@ int hld_alloc_dynamic(hld_link *L)
      * +nodefaultrpath suppresses them, as it does there.
      */
     if (L->nrpaths || (!L->no_runpath && L->nlibpaths)) {
-        size_t k, n = 0, ndef = L->no_runpath ? 0 : L->nlibpaths;
-        char *rp;
-        for (k = 0; k < L->nrpaths; k++)  n += strlen(L->rpaths[k]) + 1;
-        for (k = 0; k < ndef; k++)        n += strlen(L->libpaths[k]) + 1;
-        rp = malloc(n + 1);
+        size_t ndef = L->no_runpath ? 0 : L->nlibpaths;
+        size_t k, n = 0, total = L->nrpaths + ndef;
+        char *rp, *w;
+
+        for (k = 0; k < total; k++)
+            n += strlen(RPATH_NTH(L, k, ndef)) + 1;   /* +1 covers its ':' */
+        rp = w = malloc(n + 1);
         if (!rp) return -1;
-        rp[0] = 0;
-        for (k = 0; k < L->nrpaths; k++) {
-            if (rp[0]) strcat(rp, ":");
-            strcat(rp, L->rpaths[k]);
+        for (k = 0; k < total; k++) {
+            const char *dir = RPATH_NTH(L, k, ndef);
+            if (k) *w++ = ':';
+            strcpy(w, dir);
+            w += strlen(dir);
         }
-        for (k = 0; k < ndef; k++) {
-            if (rp[0]) strcat(rp, ":");
-            strcat(rp, L->libpaths[k]);
-        }
+        *w = 0;
         L->runpath_strx = dynstr_add(L, rp);
         free(rp);
     }
@@ -454,6 +482,24 @@ int hld_fill_dynamic(hld_link *L)
         }
     }
 
+    /*
+     * Advertise exactly the relocations that were written. Reserving more
+     * than are used would otherwise leave zeroed entries in the array, and
+     * the loader reads those as relocation type 0 and refuses the image.
+     * This belongs here, with the relocations that were just added -- not
+     * inside the .dynamic emitter below, where a guard against a silent
+     * failure would itself be skipped whenever that section had no data.
+     */
+    if (L->reladynsec) {
+        if (L->reladyn_overflow) {
+            snprintf(L->err, HLD_ERRSZ,
+                     "internal: more dynamic relocations than the %llu reserved",
+                     U(L->reladynsec->size / RELA64_SIZE));
+            return -1;
+        }
+        L->reladynsec->size = (uint64_t)L->nreladyn * RELA64_SIZE;
+    }
+
     if (L->dynamicsec->data) {
         p = L->dynamicsec->data;
         /*
@@ -489,21 +535,7 @@ int hld_fill_dynamic(hld_link *L)
         DYN(DT_SYMTAB, L->dynsymsec->addr);
         DYN(DT_STRSZ, L->dynstrsec->size);
         DYN(DT_SYMENT, SYM64_SIZE);
-        /*
-     * Advertise exactly the relocations that were written. Reserving more
-     * than are used would otherwise leave zeroed entries in the array, and
-     * the loader reads those as relocation type 0 and refuses the image.
-     */
-    if (L->reladynsec) {
-        if (L->reladyn_overflow) {
-            snprintf(L->err, HLD_ERRSZ,
-                     "internal: more dynamic relocations than the %llu reserved",
-                     U(L->reladynsec->size / RELA64_SIZE));
-            return -1;
-        }
-        L->reladynsec->size = (uint64_t)L->nreladyn * RELA64_SIZE;
-    }
-    if (L->reladynsec) {
+        if (L->reladynsec) {
             /*
              * Advertise the relocations once, through DT_RELA only.
              * Naming the same array again as DT_JMPREL — which is what the
@@ -577,31 +609,33 @@ static dsosym *dso_lookup(hld_link *L, const char *name, hld_dso **which)
     return NULL;
 }
 
+/*
+ * Append to a growable vector of directory names. The strings themselves are
+ * argv entries and outlive the link, so only the vector is owned here.
+ */
+static int dirvec_add(char ***v, size_t *n, size_t *cap, const char *dir)
+{
+    if (*n == *cap) {
+        size_t nc = *cap ? *cap * 2 : 8;
+        char **np = realloc(*v, nc * sizeof *np);
+        if (!np) return -1;          /* caller aborts; *v still valid */
+        *v = np;
+        *cap = nc;
+    }
+    (*v)[(*n)++] = (char *)dir;
+    return 0;
+}
+
+/* -L: a directory to search at link time. */
 int hld_add_libpath(hld_link *L, const char *dir)
 {
-    if (L->nlibpaths == L->libpaths_cap) {
-        size_t nc = L->libpaths_cap ? L->libpaths_cap * 2 : 8;
-        char **np = realloc(L->libpaths, nc * sizeof *np);
-        if (!np) return -1;
-        L->libpaths = np;
-        L->libpaths_cap = nc;
-    }
-    L->libpaths[L->nlibpaths++] = (char *)dir;
-    return 0;
+    return dirvec_add(&L->libpaths, &L->nlibpaths, &L->libpaths_cap, dir);
 }
 
 /* +b: a directory the loader should search, ahead of the -L defaults. */
 int hld_add_rpath(hld_link *L, const char *dir)
 {
-    if (L->nrpaths == L->rpaths_cap) {
-        size_t nc = L->rpaths_cap ? L->rpaths_cap * 2 : 4;
-        char **np = realloc(L->rpaths, nc * sizeof *np);
-        if (!np) return -1;
-        L->rpaths = np;
-        L->rpaths_cap = nc;
-    }
-    L->rpaths[L->nrpaths++] = (char *)dir;
-    return 0;
+    return dirvec_add(&L->rpaths, &L->nrpaths, &L->rpaths_cap, dir);
 }
 
 
@@ -645,27 +679,10 @@ int hld_find_library(hld_link *L, const char *name, hld_archive **ar_out)
                     return hld_archive_search(L, ar, NULL);
                 }
             } else {
-                /*
-                 * The shared forms, in the order the platform's linker
-                 * tries them. `.sl' is this platform's own shared-library
-                 * suffix and plenty of libraries still carry only it --
-                 * GMP ships as libgmp.sl here. Missing it does not fail the
-                 * link, it quietly falls through to the archive and links
-                 * that library statically instead, which is a different
-                 * program from the one the same command line builds with
-                 * the platform's linker.
-                 */
-                static const char *const forms[] = {
-                    "%s/lib%s.so",      /* the usual name */
-                    "%s/lib%s.so.1",    /* HP names the C library libc.so.1 */
-                    "%s/lib%s.sl",      /* the platform's own suffix */
-                    "%s/lib%s.sl.1",
-                    NULL
-                };
                 const char *const *fm;
 
                 if (!allow_shared) continue;
-                for (fm = forms; *fm; fm++) {
+                for (fm = hld_shared_forms; *fm; fm++) {
                     snprintf(path, sizeof path, *fm, L->libpaths[i], name);
                     f = fopen(path, "rb");
                     if (f) { fclose(f); return hld_add_dso(L, path); }
@@ -857,7 +874,6 @@ int hld_bind_imports(hld_link *L)
             g->dso = d;
             g->hint = s->value;
             d->needed = 1;
-            L->nimports++;
         }
     return 0;
 }

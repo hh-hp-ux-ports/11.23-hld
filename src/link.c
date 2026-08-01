@@ -1643,6 +1643,8 @@ void hld_link_free(hld_link *L)
     for (i = 0; i < L->nobjs; i++) hld_elf_free(L->objs[i]);
     free(L->objs);
     free(L->dynrels);
+    free(L->libpaths);
+    free(L->rpaths);
     hld_free_stubs(L);
     {
         hld_archive *ar, *arn;

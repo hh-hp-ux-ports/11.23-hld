@@ -63,7 +63,8 @@ int main(int argc, char **argv)
          */
         if (a[0] == '+') {
             /* two-token forms */
-            if (strcmp(a, "+h") == 0 && i + 1 < argc) {
+            if (strcmp(a, "+h") == 0) {
+                if (i + 1 >= argc) goto need_arg;
                 L.soname = argv[++i];       /* the name recorded in DT_SONAME */
                 continue;
             }
@@ -72,7 +73,8 @@ int main(int argc, char **argv)
              * would leave the image searching only the -L defaults, which is
              * not what the caller asked for.
              */
-            if (strcmp(a, "+b") == 0 && i + 1 < argc) {
+            if (strcmp(a, "+b") == 0) {
+                if (i + 1 >= argc) goto need_arg;
                 if (hld_add_rpath(&L, argv[++i]) < 0) goto fail;
                 continue;
             }
@@ -90,6 +92,14 @@ int main(int argc, char **argv)
                 continue;
             }
             fprintf(stderr, "hld: option `%s' is not implemented\n", a);
+            return 1;
+        need_arg:
+            /*
+             * Reached only for options we DO implement. Saying "not
+             * implemented" here would send the caller looking for a missing
+             * feature instead of a truncated command line.
+             */
+            fprintf(stderr, "hld: option `%s' needs an argument\n", a);
             return 1;
         }
         if (a[0] != '-' || !a[1]) {
