@@ -129,6 +129,19 @@ emit calln1 '.Lt:
   nop.i 0
   br.call.sptk.many b0 = .Lt ;;
 }'
+emit fchk0 '.Ls:
+{ .mfb
+  nop.m 0
+  fchkf .Ls
+  nop.b 0 ;;
+}'
+emit fchk1 '{ .mfb
+  nop.m 0
+  fchkf .Lt
+  nop.b 0 ;;
+}
+.skip 0x2000
+.Lt:'
 emit brl0 '.Ls:
 { .mlx
   nop.m 0
@@ -143,6 +156,7 @@ emit brl1 '{ .mlx
 
 for f in movl0 movl1 movl2 addl0 addl1 addl2 addls10 addls11 \
          dirty0 dirty1 adds0 adds1 adds2 call0 call1 calln0 calln1 \
+         fchk0 fchk1 \
          brl0 brl1; do
     if $XAS -mlp64 -o $W/$f.o $W/$f.s 2> $W/$f.err; then :; else
         echo "FAIL: gas on $f.s:"; cat $W/$f.err; FAIL=1
@@ -177,6 +191,10 @@ pt pcrel21b     $W/call0.o 0 $W/call1.o 0 2 0x49 0x2010
 pt pcrel21bneg  $W/calln0.o 0x100 $W/calln1.o 0x100 2 0x49 0xffffffffffffff00
 # PCREL60B brl (L+X, slot 1)
 pt pcrel60b     $W/brl0.o 0 $W/brl1.o 0 1 0x48 0x123450
+# PCREL21F fchkf (F slot 1) -- its own target encoding, distinct from the
+# branch forms above. Added after a coverage sweep found it was the one
+# instruction encoder the oracle never exercised.
+pt pcrel21f     $W/fchk0.o 0 $W/fchk1.o 0 1 0x4b 0x2010
 
 if [ $FAIL -eq 0 ]; then
     echo "OK: all patcher checks passed ($CHECKS checks, gas = $XAS)"
