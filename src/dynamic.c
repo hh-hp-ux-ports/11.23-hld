@@ -153,6 +153,14 @@ int hld_alloc_dynamic(hld_link *L)
                 g->stub_off = nimp * STUB_SIZE;
                 nimp++;
             } else if (g->kind == HLD_SYM_DEFINED || g->kind == HLD_SYM_ABS) {
+                /*
+                 * `__gp', `_end', `_etext' and the rest describe THIS
+                 * module's layout and mean nothing to anything linking
+                 * against it -- HP's own libraries export none of them
+                 * (checked against libc.so.1 and libdl.so.1). Exporting
+                 * them lets another module bind to our addresses.
+                 */
+                if (L->shared && hld_is_linker_symbol(g->name)) continue;
                 g->dynidx = nsym++;
             }
     L->ndynsym = nsym;
@@ -311,6 +319,21 @@ int hld_dlt_needs_loader(hld_link *L, const lnkent *l)
 }
 
 /* Append one entry to the relocation array the loader walks at load time. */
+/*
+ * A relocation naming symbol 0 is a relocation against nothing: the loader
+ * applies it with a value of zero and the image reads from the wrong place.
+ * It can only arise if something needed a symbol that was not exported, which
+ * is this linker's mistake -- so say so rather than emit it.
+ */
+static void reladyn_needs_sym(hld_link *L, uint32_t dynidx, const char *what)
+{
+    if (dynidx == 0 && !L->reladyn_nosym)
+        snprintf(L->err, HLD_ERRSZ,
+                 "internal: dynamic relocation for %s needs a symbol that was "
+                 "not exported", what);
+    if (dynidx == 0) L->reladyn_nosym = 1;
+}
+
 static void reladyn_add(hld_link *L, uint64_t where, uint32_t dynidx,
                         uint32_t type, uint64_t addend)
 {
@@ -418,6 +441,7 @@ int hld_fill_dynamic(hld_link *L)
         size_t n;
         for (l = L->dlt; l; l = l->next) {
             if (!hld_dlt_needs_loader(L, l)) continue;
+            reladyn_needs_sym(L, l->g->dynidx, l->g->name);
             reladyn_add(L, L->dltsec->addr + l->slot, l->g->dynidx,
                         l->kind == HLD_DLT_FPTR ? R_IA64_FPTR64MSB
                                                 : R_IA64_DIR64MSB, 0);
@@ -427,6 +451,7 @@ int hld_fill_dynamic(hld_link *L)
             dynrel *dr = &L->dynrels[n];
             reladyn_add(L, dr->in->out->addr + dr->in->out_off + dr->off,
                         dr->g->dynidx, dr->type, dr->addend);
+            reladyn_needs_sym(L, dr->g->dynidx, dr->g->name);
         }
     }
 
@@ -490,6 +515,8 @@ int hld_fill_dynamic(hld_link *L)
      * inside the .dynamic emitter below, where a guard against a silent
      * failure would itself be skipped whenever that section had no data.
      */
+    if (L->reladyn_nosym) return -1;      /* message already set */
+
     if (L->reladynsec) {
         if (L->reladyn_overflow) {
             snprintf(L->err, HLD_ERRSZ,

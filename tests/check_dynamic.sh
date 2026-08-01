@@ -302,6 +302,25 @@ if $CC -mlp64 -fPIC -c $W/shlib.c -o $W/shlib.o 2> $W/cc.err; then
     fi
 fi
 
+# --- a library must not export the linker's own layout symbols -------------
+# `__gp', `_end', `_etext' and the rest describe one module's own layout. The
+# platform's libraries export none of them (checked against libc.so.1 and
+# libdl.so.1); a library that does lets another module bind to its addresses.
+# An executable is the opposite case and must still export them, because the
+# C library resolves `_end' and `main' there.
+if [ -f $W/libhldtest.so ]; then
+    CHECKS=`expr $CHECKS + 1`
+    # Range must END at .symtab: the two tables are printed back to back with
+    # no blank line between them, and .symtab legitimately still lists these.
+    leaked=`$RE -s $W/libhldtest.so 2>/dev/null \
+            | awk '/\.dynsym/{f=1;next} /\.symtab/{f=0} f' \
+            | egrep -c '__gp$|_etext$|__text_start$|__data_start$|_end$'`
+    if [ "$leaked" = "0" ] || [ -z "$leaked" ]; then :; else
+        echo "FAIL: the shared library exports $leaked of the linker's own symbols"
+        FAIL=1
+    fi
+fi
+
 # --- run-time library search path -----------------------------------------
 # The platform's linker records the -L list in the image, and programs depend
 # on it: without it a binary that linked cleanly against a library outside the

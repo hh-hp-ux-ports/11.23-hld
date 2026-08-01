@@ -258,6 +258,7 @@ typedef struct {
     size_t nrpaths, rpaths_cap;
     uint32_t runpath_strx;
     int reladyn_overflow;
+    int reladyn_nosym;
     hld_dso *dsos, **dso_tail;
     size_t ndsos, nimports;
     uint64_t ndltrel;         /* DLT slots the loader has to fill */
