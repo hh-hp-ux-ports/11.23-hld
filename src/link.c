@@ -1577,7 +1577,8 @@ int hld_relocate(hld_link *L)
                                  "address must come from the linkage table "
                                  "instead (@ltoff, not @gprel64)",
                                  e->path, rn ? rn : "a gp-relative relocation",
-                                 sname ? sname : "a local symbol");
+                                 (sname && *sname) ? sname
+                                                   : "a local symbol");
                         goto rfail;
                     }
                     V = S - L->gp;
