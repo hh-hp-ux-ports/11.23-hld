@@ -1540,6 +1540,38 @@ int hld_relocate(hld_link *L)
                 case R_IA64_GPREL32LSB:
                 case R_IA64_GPREL64MSB:
                 case R_IA64_GPREL64LSB:
+                    /*
+                     * S - gp is only load-invariant while the target and gp
+                     * move together. In a shared library they need not: the
+                     * loader maps the segments independently and does not
+                     * preserve the distance between them. Measured on the
+                     * target -- one library's .rodata and .data were
+                     * 0x2000000000000000 apart at link time and
+                     * 0xdfffffffea79ddb8 apart once loaded.
+                     *
+                     * So a gp-relative value reaching outside the segment gp
+                     * lives in cannot be written by any linker, and no
+                     * dynamic relocation rescues it: the loader fixes data
+                     * words, not the immediate inside an instruction. The
+                     * compiler has to use a linkage-table slot instead
+                     * (LTOFF22X), which gcc 4.7.4 does and gcc 9.5 does not.
+                     *
+                     * Refuse rather than emit an address that looks plausible
+                     * and faults when it is used.
+                     */
+                    if (L->shared && S < L->data_addr) {
+                        const char *rn = hld_reloc_name(r->type);
+
+                        snprintf(L->err, HLD_ERRSZ,
+                                 "%s: %s against `%s' reaches outside the "
+                                 "data segment; gp-relative addressing cannot "
+                                 "be used that way in a shared library. The "
+                                 "address must come from the linkage table "
+                                 "instead (@ltoff, not @gprel64)",
+                                 e->path, rn ? rn : "a gp-relative relocation",
+                                 sname ? sname : "a local symbol");
+                        goto rfail;
+                    }
                     V = S - L->gp;
                     break;
 
