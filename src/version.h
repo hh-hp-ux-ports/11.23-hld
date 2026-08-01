@@ -19,4 +19,17 @@
 
 #define HLD_IDENT "@(#)hld " HLD_VERSION " - LP64 linker for HP-UX 11.23/IPF"
 
+/*
+ * What -V and --version print after the version line. The bundle patcher is
+ * derived from GNU binutils (src/ia64_patch.c), which is why the licence is
+ * GPLv3+ and why binutils is named here rather than only in the README.
+ */
+#define HLD_COPYRIGHT \
+    "Copyright (C) 2026 Hugo Hurskainen\n" \
+    "License GPLv3+: GNU GPL version 3 or later " \
+    "<https://gnu.org/licenses/gpl.html>\n" \
+    "This is free software: you are free to change and redistribute it.\n" \
+    "There is NO WARRANTY, to the extent permitted by law.\n" \
+    "Instruction-bundle handling is derived from GNU binutils."
+
 #endif

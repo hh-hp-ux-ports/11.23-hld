@@ -58,7 +58,7 @@ static void usage(void)
         "               the -L list is recorded too unless +nodefaultrpath\n"
         "  --start-group ... --end-group   re-search these archives until\n"
         "               nothing further is pulled in\n"
-        "  -V           print version\n"
+        "  -V, --version  print version and licence\n"
         "Archives are searched at their position on the command line.\n");
 }
 
@@ -142,8 +142,14 @@ int main(int argc, char **argv)
         if (strcmp(a, "-m") == 0) { L.map = 1; continue; }
         if (strcmp(a, "-dynamic") == 0) { L.dynamic = 1; continue; }
         if (strcmp(a, "-v") == 0) { L.verbose = 1; continue; }
-        if (strcmp(a, "-V") == 0) {
+        if (strcmp(a, "-V") == 0 || strcmp(a, "--version") == 0) {
+            /*
+             * The first line is exactly what it has always been -- anything
+             * parsing -V for a version keeps working -- with the licence
+             * block after it, as the GNU tools do.
+             */
             printf("%s\n", HLD_IDENT + 4);   /* past the `what` marker */
+            printf("%s\n", HLD_COPYRIGHT);
             return 0;
         }
         if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) { usage(); return 0; }
