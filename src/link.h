@@ -94,6 +94,12 @@ typedef struct hld_gsym {
  * search there is quadratic and costs minutes.
  */
 #define HLD_OSECHASH 8191
+/*
+ * Stubs are looked up by target once per out-of-range branch, in the sizing
+ * fixpoint AND again during relocation. A real C++ link needs thousands of
+ * them (cc1plus: 13,142), so the search has to be keyed, not swept.
+ */
+#define HLD_STUBHASH 4093
 #define HLD_LNKHASH 1021
 #define HLD_ARHASH  1021
 
@@ -168,10 +174,12 @@ typedef struct stubent {
     uint64_t slot;            /* byte offset within the island */
     struct stubisl *isl;      /* the island holding it */
     struct stubent *next;
+    struct stubent *hnext;    /* chain in L->stub_hash, keyed by target */
 } stubent;
 
 typedef struct stubisl {
     struct isec *at;          /* the run of bytes it occupies */
+    struct stubent **stail;   /* append point, so adding is not a walk */
     uint64_t size;
     stubent *stubs;
     struct stubisl *next;
@@ -214,6 +222,7 @@ typedef struct {
 
     hld_gsym *hash[HLD_SYMHASH];
     osec *osec_hash[HLD_OSECHASH];
+    struct stubent *stub_hash[HLD_STUBHASH];
     coderange *coderanges;
     size_t ncoderanges;
 

@@ -228,17 +228,29 @@ static stubisl *island_for_call(hld_link *L, uint64_t from)
  * for, and a fresh one is added every pass. Reuse is what makes the set
  * settle — a call that already has a stub in reach never needs another.
  */
+static unsigned stub_hashval(hld_gsym *g, isec *in, uint64_t off)
+{
+    uintptr_t k = (uintptr_t)g ^ (uintptr_t)in;
+    return (unsigned)((k ^ (k >> 16) ^ (uintptr_t)off) % HLD_STUBHASH);
+}
+
+/*
+ * Any stub for this target that the call can reach will serve -- searching
+ * only the nearest island is what stopped this converging. But sweeping every
+ * island's every stub to find it is quadratic in stub count, and this runs
+ * once per out-of-range branch in the sizing fixpoint and again during
+ * relocation. Key on the target; the chain then holds only that target's
+ * stubs, one per island that needed one, and the reach test picks among them.
+ */
 stubent *hld_stub_find(hld_link *L, uint64_t from, hld_gsym *g, isec *in,
                        uint64_t off)
 {
-    stubisl *is;
     stubent *s;
 
-    for (is = L->islands; is; is = is->next)
-        for (s = is->stubs; s; s = s->next)
-            if (s->g == g && s->in == in && s->off == off
-                && hld_branch_in_range(from, hld_stub_addr(L, s)))
-                return s;
+    for (s = L->stub_hash[stub_hashval(g, in, off)]; s; s = s->hnext)
+        if (s->g == g && s->in == in && s->off == off
+            && hld_branch_in_range(from, hld_stub_addr(L, s)))
+            return s;
     return NULL;
 }
 
@@ -246,7 +258,7 @@ static int stub_add(hld_link *L, uint64_t from, hld_gsym *g, isec *in,
                     uint64_t off)
 {
     stubisl *is = island_for_call(L, from);
-    stubent *s, **pp;
+    stubent *s;
 
     if (!is) return -1;
     s = calloc(1, sizeof *s);
@@ -257,9 +269,14 @@ static int stub_add(hld_link *L, uint64_t from, hld_gsym *g, isec *in,
     s->slot = is->size;
     s->isl = is;
     is->size += HLD_STUB_BUNDLE;
-    for (pp = &is->stubs; *pp; pp = &(*pp)->next)
-        ;
-    *pp = s;
+    if (!is->stail) is->stail = &is->stubs;   /* first stub in this island */
+    *is->stail = s;
+    is->stail = &s->next;
+    {   /* and into the by-target index hld_stub_find() uses */
+        unsigned hv = stub_hashval(g, in, off);
+        s->hnext = L->stub_hash[hv];
+        L->stub_hash[hv] = s;
+    }
     L->nstubs++;
     return 0;
 }

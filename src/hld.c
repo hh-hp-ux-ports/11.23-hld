@@ -272,6 +272,9 @@ int main(int argc, char **argv)
     phase("layout");
     if (hld_alloc_stubs(&L) < 0) goto fail;
     phase("alloc-stubs");
+    if (hld_time_on)
+        fprintf(stderr, "hld: %-22s %6llu\n", "  long-branch stubs",
+                (unsigned long long)L.nstubs);
     if (hld_build_contents(&L) < 0) goto fail;
     phase("build-contents");
     if (hld_fill_dynamic(&L) < 0) goto fail;
