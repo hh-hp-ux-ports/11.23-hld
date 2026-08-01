@@ -102,10 +102,24 @@ int hld_add_ident(hld_link *L)
 
 /* ---- output sections --------------------------------------------------- */
 
+/*
+ * Name hash for the output-section table. The names that matter here share a
+ * long common prefix (`.gnu.linkonce.t._ZN...'), so hash the whole string
+ * rather than a prefix of it.
+ */
+static unsigned osec_hashval(const char *name)
+{
+    unsigned h = 0;
+    const unsigned char *p = (const unsigned char *)name;
+
+    while (*p) h = h * 31u + *p++;
+    return h % HLD_OSECHASH;
+}
+
 static osec *osec_find(hld_link *L, const char *name)
 {
     osec *o;
-    for (o = L->osecs; o; o = o->next)
+    for (o = L->osec_hash[osec_hashval(name)]; o; o = o->hnext)
         if (strcmp(o->name, name) == 0)
             return o;
     return NULL;
@@ -136,6 +150,11 @@ osec *osec_get(hld_link *L, const char *name, uint32_t type, uint64_t flags)
     o->tail = &o->first;
     *L->osec_tail = o;
     L->osec_tail = &o->next;
+    {   /* and into the name index the lookup above uses */
+        unsigned hv = osec_hashval(name);
+        o->hnext = L->osec_hash[hv];
+        L->osec_hash[hv] = o;
+    }
     L->nosecs++;
     return o;
 }
@@ -151,15 +170,50 @@ osec *osec_get(hld_link *L, const char *name, uint32_t type, uint64_t flags)
  * wrong target that happens to land within reach encodes perfectly well and
  * faults only when the call is taken, which may be days of work later.
  */
+/*
+ * Built once, the first time a branch is checked. Walking the section list per
+ * relocation is quadratic, and a C++ link has tens of thousands of sections
+ * (one `.gnu.linkonce.t.*' per template instantiation) against hundreds of
+ * thousands of branches -- which turned a 20-second link into ten minutes.
+ */
+static int coderange_cmp(const void *a, const void *b)
+{
+    uint64_t x = ((const coderange *)a)->lo, y = ((const coderange *)b)->lo;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
 static int addr_is_code(hld_link *L, uint64_t a)
 {
-    osec *o;
-    for (o = L->osecs; o; o = o->next)
-        if ((o->flags & SHF_ALLOC) && (o->flags & SHF_EXECINSTR)
-            && o->type != SHT_NOBITS && o->size
-            && a >= o->addr && a < o->addr + o->size)
-            return 1;
-    return 0;
+    size_t lo, hi;
+
+    if (!L->coderanges) {
+        osec *o;
+        size_t n = 0;
+        for (o = L->osecs; o; o = o->next)
+            if ((o->flags & SHF_ALLOC) && (o->flags & SHF_EXECINSTR)
+                && o->type != SHT_NOBITS && o->size)
+                n++;
+        L->coderanges = malloc((n ? n : 1) * sizeof *L->coderanges);
+        if (!L->coderanges) return 1;      /* cannot check; do not reject */
+        L->ncoderanges = 0;
+        for (o = L->osecs; o; o = o->next)
+            if ((o->flags & SHF_ALLOC) && (o->flags & SHF_EXECINSTR)
+                && o->type != SHT_NOBITS && o->size) {
+                L->coderanges[L->ncoderanges].lo = o->addr;
+                L->coderanges[L->ncoderanges].hi = o->addr + o->size;
+                L->ncoderanges++;
+            }
+        qsort(L->coderanges, L->ncoderanges, sizeof *L->coderanges,
+              coderange_cmp);
+    }
+
+    /* Last range whose lo <= a, then one containment test. */
+    lo = 0; hi = L->ncoderanges;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (L->coderanges[mid].lo <= a) lo = mid + 1; else hi = mid;
+    }
+    return lo > 0 && a < L->coderanges[lo - 1].hi;
 }
 
 static int sec_is_text(uint64_t flags)
@@ -407,28 +461,31 @@ int hld_alloc_unwind(hld_link *L)
  * searches the table rather than walking it. Sorting happens after
  * relocation, when the segment-relative values in each entry are final.
  */
+/* Ordered by the address each entry describes; see hld_finish_unwind(). */
+static int unwind_entry_cmp(const void *a, const void *b)
+{
+    uint64_t x = be64((const uint8_t *)a), y = be64((const uint8_t *)b);
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
 int hld_finish_unwind(hld_link *L)
 {
-    uint8_t *p, *tmp;
-    size_t n, i, j;
+    uint8_t *p;
+    size_t n;
 
     if (!L->unwind_sec || !L->unwind_sec->data) return 0;
 
     p = L->unwind_sec->data;
     n = (size_t)(L->unwind_sec->size / UNWIND_HDR_SIZE);
-    tmp = malloc(UNWIND_HDR_SIZE);
-    if (!tmp) { lerr(L, "out of memory", NULL, NULL); return -1; }
-    for (i = 1; i < n; i++) {                    /* insertion sort: nearly ordered */
-        memcpy(tmp, p + i * UNWIND_HDR_SIZE, UNWIND_HDR_SIZE);
-        j = i;
-        while (j > 0 && be64(p + (j - 1) * UNWIND_HDR_SIZE) > be64(tmp)) {
-            memcpy(p + j * UNWIND_HDR_SIZE, p + (j - 1) * UNWIND_HDR_SIZE,
-                   UNWIND_HDR_SIZE);
-            j--;
-        }
-        memcpy(p + j * UNWIND_HDR_SIZE, tmp, UNWIND_HDR_SIZE);
-    }
-    free(tmp);
+    /*
+     * This was an insertion sort, on the reasoning that the table arrives
+     * nearly ordered. That holds only while the output section order matches
+     * the order entries were collected in -- and C++ COMDAT breaks it: one
+     * `.gnu.linkonce.t.*' per template instantiation interleaves tens of
+     * thousands of sections, leaving the table far from sorted. Measured at
+     * 43,491 entries it cost 63.8s of the link; qsort makes it negligible.
+     */
+    qsort(p, n, UNWIND_HDR_SIZE, unwind_entry_cmp);
 
     if (L->unwind_hdr_sec && L->unwind_hdr_sec->data) {
         uint8_t *h = L->unwind_hdr_sec->data;
@@ -1643,6 +1700,7 @@ void hld_link_free(hld_link *L)
     for (i = 0; i < L->nobjs; i++) hld_elf_free(L->objs[i]);
     free(L->objs);
     free(L->dynrels);
+    free(L->coderanges);
     free(L->libpaths);
     free(L->rpaths);
     hld_free_stubs(L);

@@ -35,7 +35,13 @@ typedef struct osec {
     uint8_t *data;            /* materialized contents (NULL for NOBITS) */
     isec *first, **tail;      /* contributions in link order */
     struct osec *next;
+    struct osec *hnext;       /* chain in L->osec_hash, keyed by name */
 } osec;
+
+/* Address ranges of mapped code, sorted; see addr_is_code(). */
+typedef struct coderange {
+    uint64_t lo, hi;
+} coderange;
 
 typedef struct dsosym {
     const char *name;
@@ -81,6 +87,13 @@ typedef struct hld_gsym {
 } hld_gsym;
 
 #define HLD_SYMHASH 1021
+/*
+ * Output sections are looked up by name once per INPUT section. C++ template
+ * instantiations give one `.gnu.linkonce.t.*' plus one matching unwind
+ * section each, so a real C++ link has tens of thousands of them -- a linear
+ * search there is quadratic and costs minutes.
+ */
+#define HLD_OSECHASH 8191
 #define HLD_LNKHASH 1021
 #define HLD_ARHASH  1021
 
@@ -200,6 +213,9 @@ typedef struct {
     size_t nosecs;
 
     hld_gsym *hash[HLD_SYMHASH];
+    osec *osec_hash[HLD_OSECHASH];
+    coderange *coderanges;
+    size_t ncoderanges;
 
     /* linkage tables */
     lnkent *dlt_hash[HLD_LNKHASH], *dlt, **dlt_tail;

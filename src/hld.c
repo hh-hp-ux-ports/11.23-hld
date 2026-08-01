@@ -15,6 +15,29 @@
 
 #include "link.h"
 
+#include <time.h>
+
+/*
+ * Phase timing, off unless HLD_TIME is set in the environment. A link that
+ * takes minutes rather than seconds is a question about which phase, and
+ * without this the only way to answer it is to guess.
+ */
+static int hld_time_on;
+static clock_t hld_time_last;
+static clock_t hld_start;
+
+static void phase(const char *name)
+{
+    clock_t now;
+
+    if (!hld_time_on) return;
+    now = clock();
+    if (name)
+        fprintf(stderr, "hld: %-22s %6.2fs\n", name,
+                (double)(now - hld_time_last) / CLOCKS_PER_SEC);
+    hld_time_last = now;
+}
+
 static void usage(void)
 {
     fprintf(stderr,
@@ -49,6 +72,7 @@ int main(int argc, char **argv)
     size_t ngroup = 0, group_cap = 0;
     int in_group = 0;
 
+    hld_start = clock();
     memset(&L, 0, sizeof L);
     L.osec_tail = &L.osecs;
     L.out_path = "a.out";
@@ -216,9 +240,16 @@ int main(int argc, char **argv)
 
     if (!ninputs) { usage(); return 1; }
 
+    hld_time_on = getenv("HLD_TIME") != NULL;
+    if (hld_time_on)
+        fprintf(stderr, "hld: %-22s %6.2fs\n", "inputs (objects+libs)",
+                (double)(clock() - hld_start) / CLOCKS_PER_SEC);
+    phase(NULL);
     if (hld_add_ident(&L) < 0) goto fail;
     if (hld_link_millicode(&L) < 0) goto fail;
+    phase("millicode");
     if (hld_allocate_commons(&L) < 0) goto fail;
+    phase("commons");
     /*
      * The linker's own symbols are established before any library is
      * consulted. They name this module's layout -- `_end', `__gp', `_etext'
@@ -228,18 +259,31 @@ int main(int argc, char **argv)
      * is left unwritten once layout defines the symbol locally after all.
      */
     if (hld_predefine_symbols(&L) < 0) goto fail;
+    phase("predefine");
     if (hld_bind_imports(&L) < 0) goto fail;
+    phase("bind-imports");
     if (hld_alloc_unwind(&L) < 0) goto fail;
+    phase("alloc-unwind");
     if (hld_alloc_linkage(&L) < 0) goto fail;
+    phase("alloc-linkage");
     if (hld_alloc_dynamic(&L) < 0) goto fail;
+    phase("alloc-dynamic");
     if (hld_layout(&L) < 0) goto fail;
+    phase("layout");
     if (hld_alloc_stubs(&L) < 0) goto fail;
+    phase("alloc-stubs");
     if (hld_build_contents(&L) < 0) goto fail;
+    phase("build-contents");
     if (hld_fill_dynamic(&L) < 0) goto fail;
+    phase("fill-dynamic");
     if (hld_write_stubs(&L) < 0) goto fail;
+    phase("write-stubs");
     if (hld_relocate(&L) < 0) goto fail;
+    phase("relocate");
     if (hld_finish_unwind(&L) < 0) goto fail;
+    phase("finish-unwind");
     if (hld_write_exec(&L) < 0) goto fail;
+    phase("write-exec");
     if (L.map) hld_print_map(&L);
 
     free(group);
