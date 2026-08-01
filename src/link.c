@@ -1559,7 +1559,15 @@ int hld_relocate(hld_link *L)
                      * Refuse rather than emit an address that looks plausible
                      * and faults when it is used.
                      */
-                    if (L->shared && S < L->data_addr) {
+                    /*
+                     * Only a target in the TEXT segment is a problem. An
+                     * absolute symbol (`__TLS_SIZE' and the rest are SHN_ABS
+                     * with small values) is not an address at all and must
+                     * not be refused, and anything at or above the data base
+                     * moves with gp.
+                     */
+                    if (L->shared
+                        && S >= L->text_addr && S < L->data_addr) {
                         const char *rn = hld_reloc_name(r->type);
 
                         snprintf(L->err, HLD_ERRSZ,
