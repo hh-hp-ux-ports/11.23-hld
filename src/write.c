@@ -261,6 +261,14 @@ int hld_write_exec(hld_link *L)
                     link = L->dynsymsec->shndx;
                 if (L->dynamic && L->pltsec && o == L->reladynsec)
                     info = L->pltsec->shndx;
+                /*
+                 * .dynsym's sh_info is the index of the first global. A
+                 * shared library puts its segment anchors before them, and a
+                 * reader that trusts sh_info would otherwise treat those
+                 * locals as exports.
+                 */
+                if (L->dynamic && o == L->dynsymsec)
+                    info = L->ndynlocal ? L->ndynlocal : 1;
                 put_shdr(shtab + o->shndx * SHDR64_SIZE, names[k], o->type,
                          o->flags, o->addr, o->off, o->size, link, info,
                          o->align, o->entsize);

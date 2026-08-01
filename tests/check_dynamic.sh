@@ -302,6 +302,49 @@ if $CC -mlp64 -fPIC -c $W/shlib.c -o $W/shlib.o 2> $W/cc.err; then
     fi
 fi
 
+# --- a library's own data must be relocated at load time -------------------
+# A string literal or a static has no global symbol, so its address in the
+# linkage table cannot be relocated by naming it. The platform's linker names
+# the SEGMENT it lives in and carries the rest in the addend; hld emitted
+# nothing at all, so the slot kept its link-time value and the library handed
+# back a pointer into whatever now occupies that address. Silent: it links
+# clean and returns a plausible-looking pointer.
+CHECKS=`expr $CHECKS + 1`
+cat > $W/anch.c <<'CEOF'
+static int counter = 41;
+static struct { int a, b; } rec = { 3, 4 };
+int         a_glob(void)   { return counter + 1; }
+const char *a_str(void)    { return "anchored"; }
+const void *a_rec(void)    { return &rec; }
+int         a_recsum(void) { const int *p = (const int *)a_rec(); return p[0]+p[1]; }
+CEOF
+cat > $W/anchmain.c <<'CEOF'
+#include <string.h>
+extern int a_glob(void); extern const char *a_str(void); extern int a_recsum(void);
+int main(void) {
+    if (a_glob() != 42) return 1;
+    if (strcmp(a_str(), "anchored") != 0) return 2;   /* .rodata via the DLT */
+    if (a_recsum() != 7) return 3;                    /* .data  */
+    return 7;
+}
+CEOF
+if $CC -mlp64 -fPIC -c $W/anch.c -o $W/anch.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h libanch.so -o $W/libanch.so $W/anch.o 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        $CC -mlp64 -o $W/anchprog $W/anchmain.c -L$W -lanch 2> $W/link.err
+        SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/anchprog
+        rc=$?
+        if [ $rc -ne 7 ]; then
+            echo "FAIL: library-local addresses not relocated (got $rc:"
+            echo "      1=global 2=string literal 3=static struct)"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: could not link the anchor fixture:"; cat $W/link.err; FAIL=1
+    fi
+fi
+
 # --- a library must not export the linker's own layout symbols -------------
 # `__gp', `_end', `_etext' and the rest describe one module's own layout. The
 # platform's libraries export none of them (checked against libc.so.1 and

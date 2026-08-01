@@ -266,6 +266,15 @@ typedef struct {
     char **rpaths;            /* +b, searched ahead of the -L list */
     size_t nrpaths, rpaths_cap;
     uint32_t runpath_strx;
+    /*
+     * A shared library relocates addresses of its own data against a segment
+     * anchor: a LOCAL SECTION symbol in .dynsym, with the offset carried in
+     * the addend. This is what the platform's linker does, and it is the only
+     * way to relocate a target that has no global symbol -- a string literal,
+     * for instance.
+     */
+    uint32_t anchor_text, anchor_data;   /* .dynsym indices, 0 if none */
+    uint32_t ndynlocal;                  /* locals before the first global */
     int reladyn_overflow;
     int reladyn_nosym;
     hld_dso *dsos, **dso_tail;
@@ -326,6 +335,7 @@ int  hld_add_rpath(hld_link *L, const char *dir);
 int  hld_find_library(hld_link *L, const char *name, hld_archive **ar_out);
 int  hld_predefine_symbols(hld_link *L);
 int  hld_is_linker_symbol(const char *name);
+uint64_t hld_target_addr(hld_gsym *g, isec *in, uint64_t off);
 int  hld_bind_imports(hld_link *L);
 int  hld_alloc_dynamic(hld_link *L);
 int  hld_add_ident(hld_link *L);

@@ -15,6 +15,9 @@ CHECKS=0
 [ -x $HLD ] || { echo "build first: make"; exit 2; }
 
 [ -f tests/local.conf ] && . tests/local.conf
+# A local.conf carried over from another machine names a tool that is not here;
+# fall back to probing rather than reporting nothing was found.
+[ -n "$XAS" ] && [ ! -x "$XAS" ] && XAS=
 if [ -z "$XAS" ]; then
     XAS=`command -v ia64-hp-hpux11.23-as 2>/dev/null`
 fi

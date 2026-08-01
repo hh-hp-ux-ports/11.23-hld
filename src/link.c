@@ -948,7 +948,7 @@ int hld_reloc_target(hld_link *L, hld_elf *e, hld_sym *syms, size_t nsyms,
 }
 
 /* Final address of a resolved target. Valid only after layout. */
-static uint64_t target_addr(hld_gsym *g, isec *in, uint64_t off)
+uint64_t hld_target_addr(hld_gsym *g, isec *in, uint64_t off)
 {
     if (g) return g->value + off;
     if (in) return in->out->addr + in->out_off + off;
@@ -1282,12 +1282,12 @@ int hld_build_contents(hld_link *L)
      */
     if (L->opdsec && L->opdsec->data)
         for (l = L->opd; l; l = l->next) {
-            st64(L->opdsec->data + l->slot, target_addr(l->g, l->in, l->off));
+            st64(L->opdsec->data + l->slot, hld_target_addr(l->g, l->in, l->off));
             st64(L->opdsec->data + l->slot + 8, L->gp);
         }
     if (L->pltoffsec && L->pltoffsec->data)
         for (l = L->pltoff; l; l = l->next) {
-            st64(L->pltoffsec->data + l->slot, target_addr(l->g, l->in, l->off));
+            st64(L->pltoffsec->data + l->slot, hld_target_addr(l->g, l->in, l->off));
             st64(L->pltoffsec->data + l->slot + 8, L->gp);
         }
     if (L->dltsec && L->dltsec->data)
@@ -1308,13 +1308,13 @@ int hld_build_contents(hld_link *L)
                 lnkent *d = opd_find(L, l->g, l->in, l->off);
                 v = d ? L->opdsec->addr + d->slot : 0;
             } else if (l->kind == HLD_DLT_TPREL) {
-                v = target_addr(l->g, l->in, l->off) - L->tls_base;
+                v = hld_target_addr(l->g, l->in, l->off) - L->tls_base;
             } else if (l->kind == HLD_DLT_DTPMOD) {
                 v = ~(uint64_t)0;          /* this module, as HP ld writes it */
             } else if (l->kind == HLD_DLT_DTPREL) {
-                v = target_addr(l->g, l->in, l->off) - L->tls_base;
+                v = hld_target_addr(l->g, l->in, l->off) - L->tls_base;
             } else {
-                v = target_addr(l->g, l->in, l->off);
+                v = hld_target_addr(l->g, l->in, l->off);
             }
             st64(L->dltsec->data + l->slot, v);
         }
@@ -1387,7 +1387,7 @@ int hld_relocate(hld_link *L)
                     free(syms); free(rel);
                     return -1;
                 }
-                S = target_addr(tg, tin, toff);
+                S = hld_target_addr(tg, tin, toff);
                 P = where;
 
                 /*

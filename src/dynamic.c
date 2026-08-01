@@ -145,6 +145,17 @@ int hld_alloc_dynamic(hld_link *L)
      * `main` there), so an executable that exports nothing cannot be loaded.
      */
     nsym = 1;
+    /*
+     * A shared library needs an anchor per segment: its own data addresses
+     * are relocated as <anchor> + offset, because a string literal or a
+     * static has no global symbol to name. These are LOCAL SECTION symbols
+     * and must precede every global, which is what .dynsym's sh_info says.
+     */
+    if (L->shared) {
+        L->anchor_text = nsym++;
+        L->anchor_data = nsym++;
+    }
+    L->ndynlocal = nsym;              /* index of the first global */
     for (h = 0; h < HLD_SYMHASH; h++)
         for (g = L->hash[h]; g; g = g->next)
             if (g->kind == HLD_SYM_IMPORT) {
@@ -313,9 +324,32 @@ int hld_alloc_dynamic(hld_link *L)
  */
 int hld_dlt_needs_loader(hld_link *L, const lnkent *l)
 {
-    if (!l->g) return 0;
+    if (!l->g) {
+        /*
+         * No global symbol: a string literal, a static, an anonymous
+         * constant. In a shared library its address still moves with the
+         * load, so the slot has to be relocated -- against a segment anchor,
+         * since there is no symbol to name. Missing this is silent: the slot
+         * keeps its link-time value and the library hands out a pointer into
+         * whatever now occupies that address.
+         */
+        return L->shared && l->kind == HLD_DLT_PLAIN;
+    }
     if (l->g->kind == HLD_SYM_IMPORT) return 1;
     return L->shared && l->g->kind == HLD_SYM_DEFINED;
+}
+
+/* The allocated section a segment anchor belongs to: the first one at or
+ * after the segment base. A SECTION symbol has to name a real section. */
+static uint32_t seg_shndx(hld_link *L, uint64_t base)
+{
+    osec *o, *best = NULL;
+
+    for (o = L->osecs; o; o = o->next)
+        if ((o->flags & SHF_ALLOC) && o->addr >= base
+            && (!best || o->addr < best->addr))
+            best = o;
+    return best ? best->shndx : 1;
 }
 
 /* Append one entry to the relocation array the loader walks at load time. */
@@ -378,6 +412,19 @@ int hld_fill_dynamic(hld_link *L)
      * resolved to at link time as a hint; exports name the section they are
      * defined in so libraries can bind to them.
      */
+    if (L->dynsymsec->data && L->shared) {
+        /* SECTION-typed locals, one per segment; see hld_dlt_needs_loader(). */
+        uint8_t *e = L->dynsymsec->data + (size_t)L->anchor_text * SYM64_SIZE;
+        st32(e + 0, 0);                                  /* no name */
+        e[4] = (uint8_t)((STB_LOCAL << 4) | STT_SECTION);
+        st16(e + 6, (uint16_t)seg_shndx(L, L->text_addr));
+        st64(e + 8, L->text_addr);
+        e = L->dynsymsec->data + (size_t)L->anchor_data * SYM64_SIZE;
+        st32(e + 0, 0);
+        e[4] = (uint8_t)((STB_LOCAL << 4) | STT_SECTION);
+        st16(e + 6, (uint16_t)seg_shndx(L, L->data_addr));
+        st64(e + 8, L->data_addr);
+    }
     if (L->dynsymsec->data)
         for (h = 0; h < HLD_SYMHASH; h++)
             for (g = L->hash[h]; g; g = g->next) {
@@ -441,6 +488,20 @@ int hld_fill_dynamic(hld_link *L)
         size_t n;
         for (l = L->dlt; l; l = l->next) {
             if (!hld_dlt_needs_loader(L, l)) continue;
+            if (!l->g) {
+                /*
+                 * A local target -- no symbol to name, so name the segment
+                 * it lives in and carry the rest in the addend, exactly as
+                 * the platform's linker does (`__text_seg + 3a8').
+                 */
+                uint64_t a = hld_target_addr(NULL, l->in, l->off);
+                int text = a < L->data_addr;
+                reladyn_add(L, L->dltsec->addr + l->slot,
+                            text ? L->anchor_text : L->anchor_data,
+                            R_IA64_DIR64MSB,
+                            a - (text ? L->text_addr : L->data_addr));
+                continue;
+            }
             reladyn_needs_sym(L, l->g->dynidx, l->g->name);
             reladyn_add(L, L->dltsec->addr + l->slot, l->g->dynidx,
                         l->kind == HLD_DLT_FPTR ? R_IA64_FPTR64MSB
