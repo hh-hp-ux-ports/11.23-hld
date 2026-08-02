@@ -1507,7 +1507,8 @@ int hld_relocate(hld_link *L)
                 case R_IA64_PLTOFF64I:
                 case R_IA64_PLTOFF64MSB:
                 case R_IA64_PLTOFF64LSB:
-                    if (tg && tg->kind == HLD_SYM_IMPORT) {
+                    if (tg && tg->kind == HLD_SYM_IMPORT
+                        && hld_import_is_func(tg)) {
                         if (!L->pltsec) {
                             snprintf(L->err, HLD_ERRSZ,
                                      "%s: `%s' needs an import descriptor",

@@ -46,6 +46,7 @@ typedef struct coderange {
 typedef struct dsosym {
     const char *name;
     uint64_t value;
+    uint8_t type, bind;       /* what the defining library says it is */
     struct dsosym *next;
 } dsosym;
 
@@ -73,6 +74,7 @@ typedef struct hld_gsym {
     uint64_t value;           /* final address (ABS: the value itself) */
     uint64_t size;
     uint8_t type, bind, other;
+    uint8_t has_plt;          /* an import we call: has a descriptor + stub */
     int short_common;         /* COMMON belongs in the short bss (.sbss) */
     isec *in;                 /* defining input section (DEFINED) */
     uint64_t in_off;          /* offset within that input section */
@@ -347,6 +349,7 @@ int  hld_add_rpath(hld_link *L, const char *dir);
 int  hld_find_library(hld_link *L, const char *name, hld_archive **ar_out);
 int  hld_predefine_symbols(hld_link *L);
 int  hld_is_linker_symbol(const char *name);
+int  hld_import_is_func(const hld_gsym *g);
 uint64_t hld_target_addr(hld_gsym *g, isec *in, uint64_t off);
 lnkent *hld_opd_find(hld_link *L, hld_gsym *g, isec *in, uint64_t off);
 int  hld_bind_imports(hld_link *L);

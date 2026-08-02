@@ -57,6 +57,17 @@ static const char *const hld_shared_forms[] = {
 #define RPATH_NTH(L, k, ndef) \
     ((k) < (L)->nrpaths ? (L)->rpaths[(k)] : (L)->libpaths[(k) - (L)->nrpaths])
 
+/*
+ * Is this import something we call? Only a function gets a descriptor and a
+ * stub. A NOTYPE symbol the defining library did not classify is treated as a
+ * function, which is the safe default: a spurious descriptor for something
+ * never called is wasted space, a missing one for a call is a crash.
+ */
+int hld_import_is_func(const hld_gsym *g)
+{
+    return g->type == STT_FUNC || g->type == STT_NOTYPE;
+}
+
 /* Standard ELF symbol hash (the gABI function). */
 static uint32_t elf_hash(const char *name)
 {
@@ -170,9 +181,17 @@ int hld_alloc_dynamic(hld_link *L)
         for (g = L->hash[h]; g; g = g->next)
             if (g->kind == HLD_SYM_IMPORT) {
                 g->dynidx = nsym++;
-                g->plt_slot = nimp * 16;
-                g->stub_off = nimp * STUB_SIZE;
-                nimp++;
+                /*
+                 * A descriptor and a call stub are for calling something. An
+                 * imported VARIABLE needs neither -- its address is fixed up
+                 * in the data word that holds it.
+                 */
+                if (hld_import_is_func(g)) {
+                    g->plt_slot = nimp * 16;
+                    g->stub_off = nimp * STUB_SIZE;
+                    g->has_plt = 1;
+                    nimp++;
+                }
             } else if (g->kind == HLD_SYM_DEFINED || g->kind == HLD_SYM_ABS) {
                 /*
                  * `__gp', `_end', `_etext' and the rest describe THIS
@@ -494,8 +513,14 @@ int hld_fill_dynamic(hld_link *L)
                 st32(e + 0, g->strx);
                 e[5] = 0;
                 if (g->kind == HLD_SYM_IMPORT) {
-                    /* the platform's linker marks imports weak */
-                    e[4] = ELF64_ST_INFO(STB_WEAK, STT_FUNC);
+                    /*
+                     * The platform's linker marks imports weak, but the TYPE
+                     * has to be what the symbol actually is: calling an
+                     * imported variable a function is how a data reference
+                     * ends up going through a descriptor.
+                     */
+                    e[4] = ELF64_ST_INFO(g->bind ? g->bind : STB_WEAK,
+                                         g->type ? g->type : STT_FUNC);
                     st16(e + 6, SHN_UNDEF);
                     st64(e + 8, g->hint);
                     st64(e + 16, 0);
@@ -629,7 +654,7 @@ int hld_fill_dynamic(hld_link *L)
                 uint64_t plt_addr;
                 uint8_t *sp;
 
-                if (g->kind != HLD_SYM_IMPORT) continue;
+                if (g->kind != HLD_SYM_IMPORT || !g->has_plt) continue;
                 nfilled++;
                 plt_addr = L->pltsec->addr + g->plt_slot;
 
@@ -988,6 +1013,8 @@ static int add_dso(hld_link *L, const char *path, int indirect)
                 if (!ds) continue;
                 ds->name = sy->name;    /* points into the library's image */
                 ds->value = sy->value;
+                ds->type = (uint8_t)ELF64_ST_TYPE(sy->info);
+                ds->bind = (uint8_t)ELF64_ST_BIND(sy->info);
                 ds->next = d->hash[h];
                 d->hash[h] = ds;
             }
@@ -1089,6 +1116,16 @@ int hld_bind_imports(hld_link *L)
             g->kind = HLD_SYM_IMPORT;
             g->dso = d;
             g->hint = s->value;
+            /*
+             * Object files often reference a symbol without saying what it
+             * is -- `extern int errno;' comes through as NOTYPE. The
+             * defining library knows: libc says errno is an OBJECT of 4
+             * bytes. Assuming FUNC instead builds a function descriptor for
+             * a variable, and the code then reads its data through a
+             * descriptor slot.
+             */
+            if (g->type == STT_NOTYPE) g->type = s->type;
+            if (s->bind) g->bind = s->bind;
             d->needed = 1;
         }
     return 0;

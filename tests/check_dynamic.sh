@@ -407,6 +407,37 @@ if $CC -mlp64 -O2 -fPIC -c $W/fpt.c -o $W/fpt.o 2> $W/cc.err; then
     fi
 fi
 
+# --- an import is what the defining library says it is ---------------------
+# Object files often reference a symbol without saying what it is: `extern int
+# errno' arrives as NOTYPE. The library knows -- libc says errno is an OBJECT.
+# Assuming FUNC builds a call descriptor for a variable, and the code then
+# reads its data through a descriptor slot, which is a segfault.
+CHECKS=`expr $CHECKS + 1`
+cat > $W/ety.c <<'CEOF'
+#include <errno.h>
+int ety(void) { errno = 5; return errno; }
+CEOF
+if $CC -mlp64 -O2 -fPIC -c $W/ety.c -o $W/ety.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h libety.so -o $W/libety.so $W/ety.o -L$LIBDIR -lc 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        ln=`$RE -s $W/libety.so 2>/dev/null \
+            | awk '/\.dynsym/{f=1;next} /\.symtab/{f=0} f' | grep " errno$"`
+        case "$ln" in
+            *OBJECT*) : ;;
+            *) echo "FAIL: errno imported as \"$ln\", expected OBJECT"; FAIL=1 ;;
+        esac
+        CHECKS=`expr $CHECKS + 1`
+        n=`$RE -r $W/libety.so 2>/dev/null | grep -c "IPLT.*errno"`
+        if [ "$n" != "0" ]; then
+            echo "FAIL: a call descriptor was built for the variable errno"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: could not link the import-type fixture:"; cat $W/link.err; FAIL=1
+    fi
+fi
+
 # --- hidden visibility must not be exported --------------------------------
 # libgcc's millicode and anything marked visibility("hidden") are not part of
 # a library's interface. Exporting them offers them for interposition, which
