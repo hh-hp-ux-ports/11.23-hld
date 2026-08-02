@@ -1025,9 +1025,20 @@ static lnkent *opd_find(hld_link *L, hld_gsym *g, isec *in, uint64_t off)
  * Everything else about an import resolves here — a call goes to the stub,
  * and a linkage-table slot is handled with the rest of the table.
  */
-static int hld_dynrel_type(const hld_gsym *g, uint32_t type, uint32_t *out)
+/*
+ * Does this data word need the loader? An imported address always does. In a
+ * SHARED LIBRARY so does an address of something defined here: the word is
+ * written with a link-time address and the library is loaded elsewhere.
+ * Missing that is silent -- a table of string pointers comes back empty, and
+ * a table of function pointers faults on the first call through it.
+ */
+static int hld_dynrel_type(hld_link *L, const hld_gsym *g, uint32_t type,
+                           uint32_t *out)
 {
-    if (!g || g->kind != HLD_SYM_IMPORT) return 0;
+    int imported = g && g->kind == HLD_SYM_IMPORT;
+    int local_in_dso = L->shared && !imported;
+
+    if (!imported && !local_in_dso) return 0;
     switch (type) {
     case R_IA64_DIR64MSB:
     case R_IA64_DIR64LSB:
@@ -1044,7 +1055,8 @@ static int hld_dynrel_type(const hld_gsym *g, uint32_t type, uint32_t *out)
 }
 
 static int dynrel_add(hld_link *L, isec *in, uint64_t off, hld_gsym *g,
-                      uint64_t addend, uint32_t type)
+                      uint64_t addend, uint32_t type,
+                      isec *tin, uint64_t toff, int local)
 {
     if (L->ndynrel == L->dynrel_cap) {
         size_t cap = L->dynrel_cap ? L->dynrel_cap * 2 : 16;
@@ -1058,6 +1070,9 @@ static int dynrel_add(hld_link *L, isec *in, uint64_t off, hld_gsym *g,
     L->dynrels[L->ndynrel].g = g;
     L->dynrels[L->ndynrel].addend = addend;
     L->dynrels[L->ndynrel].type = type;
+    L->dynrels[L->ndynrel].tin = tin;
+    L->dynrels[L->ndynrel].toff = toff;
+    L->dynrels[L->ndynrel].local = local;
     L->ndynrel++;
     return 0;
 }
@@ -1176,10 +1191,16 @@ int hld_alloc_linkage(hld_link *L)
                     free(syms); free(rel);
                     return -1;
                 }
-                if (want_dyn && hld_dynrel_type(g, r->type, &dtype)) {
-                    if (dynrel_add(L, site, r->offset, g, off, dtype) < 0) goto oom;
-                    /* The other module owns the descriptor; don't make one. */
-                    continue;
+                if (want_dyn && hld_dynrel_type(L, g, r->type, &dtype)) {
+                    int loc = !(g && g->kind == HLD_SYM_IMPORT);
+                    if (dynrel_add(L, site, r->offset, g, off, dtype,
+                                   in, off, loc) < 0) goto oom;
+                    /*
+                     * An imported descriptor belongs to the other module.
+                     * A local one is ours, and the loader only adjusts the
+                     * word -- so keep building it.
+                     */
+                    if (!loc) continue;
                 }
                 if (want_opd) dlt_kind = HLD_DLT_FPTR;
                 if ((dlt_kind == HLD_DLT_TPREL || dlt_kind == HLD_DLT_DTPMOD
@@ -1397,7 +1418,8 @@ int hld_relocate(hld_link *L)
                  * overwrites it from the dynamic relocation recorded for this
                  * site when the linkage tables were built.
                  */
-                if (hld_dynrel_type(tg, r->type, &dyntype))
+                if (tg && tg->kind == HLD_SYM_IMPORT
+                    && hld_dynrel_type(L, tg, r->type, &dyntype))
                     S = tg->hint + toff;
 
                 switch (r->type) {

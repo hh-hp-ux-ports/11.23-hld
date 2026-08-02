@@ -522,9 +522,19 @@ int hld_fill_dynamic(hld_link *L)
         /* And the data words that hold another module's address. */
         for (n = 0; n < L->ndynrel; n++) {
             dynrel *dr = &L->dynrels[n];
-            reladyn_add(L, dr->in->out->addr + dr->in->out_off + dr->off,
-                        dr->g->dynidx, dr->type, dr->addend);
-            reladyn_needs_sym(L, dr->g->dynidx, dr->g->name);
+            uint64_t at = dr->in->out->addr + dr->in->out_off + dr->off;
+            if (dr->local) {
+                /* No symbol to name: anchor on the segment, as HP does. */
+                uint64_t a = hld_target_addr(dr->g, dr->tin, dr->toff)
+                             + dr->addend;
+                int text = a < L->data_addr;
+                reladyn_add(L, at, text ? L->anchor_text : L->anchor_data,
+                            dr->type,
+                            a - (text ? L->text_addr : L->data_addr));
+            } else {
+                reladyn_add(L, at, dr->g->dynidx, dr->type, dr->addend);
+                reladyn_needs_sym(L, dr->g->dynidx, dr->g->name);
+            }
         }
     }
 

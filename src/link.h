@@ -194,9 +194,17 @@ typedef struct stubisl {
 typedef struct dynrel {
     struct isec *in;          /* input section holding the word */
     uint64_t off;             /* offset within that section */
-    struct hld_gsym *g;       /* the imported symbol */
+    struct hld_gsym *g;       /* the imported symbol, or NULL if local */
     uint64_t addend;          /* added to the symbol's address */
     uint32_t type;            /* R_IA64_DIR64MSB or R_IA64_FPTR64MSB */
+    /*
+     * For a target defined in THIS module there is no symbol to name, so
+     * keep where it is: the relocation becomes <segment anchor> + offset,
+     * resolved once addresses are final.
+     */
+    struct isec *tin;
+    uint64_t toff;
+    int local;
 } dynrel;
 
 /*
