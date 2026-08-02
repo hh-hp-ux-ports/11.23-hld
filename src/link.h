@@ -283,6 +283,7 @@ typedef struct {
      * for instance.
      */
     uint32_t anchor_text, anchor_data;   /* .dynsym indices, 0 if none */
+    uint32_t anchor_text_strx, anchor_data_strx;
     uint32_t ndynlocal;                  /* locals before the first global */
     int reladyn_overflow;
     int reladyn_nosym;

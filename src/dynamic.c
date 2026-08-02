@@ -155,6 +155,16 @@ int hld_alloc_dynamic(hld_link *L)
         L->anchor_text = nsym++;
         L->anchor_data = nsym++;
     }
+    /*
+     * Named, not anonymous. HP's anchors are `__text_seg' and `__data_seg' --
+     * the same names this linker already defines for itself -- and an
+     * anonymous SECTION symbol is the one difference left between its
+     * relocations and ours.
+     */
+    if (L->shared) {
+        L->anchor_text_strx = dynstr_add(L, "__text_seg");
+        L->anchor_data_strx = dynstr_add(L, "__data_seg");
+    }
     L->ndynlocal = nsym;              /* index of the first global */
     for (h = 0; h < HLD_SYMHASH; h++)
         for (g = L->hash[h]; g; g = g->next)
@@ -453,7 +463,7 @@ int hld_fill_dynamic(hld_link *L)
     if (L->dynsymsec->data && L->shared) {
         /* SECTION-typed locals, one per segment; see hld_dlt_needs_loader(). */
         uint8_t *e = L->dynsymsec->data + (size_t)L->anchor_text * SYM64_SIZE;
-        st32(e + 0, 0);                                  /* no name */
+        st32(e + 0, L->anchor_text_strx);
         e[4] = (uint8_t)((STB_LOCAL << 4) | STT_SECTION);
         {
             osec *a = seg_anchor_sec(L, L->text_addr);
@@ -461,7 +471,7 @@ int hld_fill_dynamic(hld_link *L)
             st64(e + 8, a ? a->addr : L->text_addr);
         }
         e = L->dynsymsec->data + (size_t)L->anchor_data * SYM64_SIZE;
-        st32(e + 0, 0);
+        st32(e + 0, L->anchor_data_strx);
         e[4] = (uint8_t)((STB_LOCAL << 4) | STT_SECTION);
         {
             osec *a = seg_anchor_sec(L, L->data_addr);
@@ -556,9 +566,16 @@ int hld_fill_dynamic(hld_link *L)
             dynrel *dr = &L->dynrels[n];
             uint64_t at = dr->in->out->addr + dr->in->out_off + dr->off;
             if (dr->local) {
+                /*
+                 * toff already carries the addend -- it is the target offset
+                 * hld_reloc_target() resolved, addend included. Adding
+                 * dr->addend again counts it twice, which is invisible for
+                 * the first entry of a table (offset 0) and wrong for every
+                 * one after it.
+                 */
                 reladyn_anchored(L, at,
-                                 hld_target_addr(dr->g, dr->tin, dr->toff)
-                                 + dr->addend, dr->type);
+                                 hld_target_addr(dr->g, dr->tin, dr->toff),
+                                 dr->type);
             } else {
                 reladyn_add(L, at, dr->g->dynidx, dr->type, dr->addend);
                 reladyn_needs_sym(L, dr->g->dynidx, dr->g->name);
