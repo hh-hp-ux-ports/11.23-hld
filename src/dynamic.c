@@ -380,7 +380,8 @@ int hld_dlt_needs_loader(hld_link *L, const lnkent *l)
          * keeps its link-time value and the library hands out a pointer into
          * whatever now occupies that address.
          */
-        return L->shared && l->kind == HLD_DLT_PLAIN;
+        return L->shared && (l->kind == HLD_DLT_PLAIN
+                             || l->kind == HLD_DLT_FPTR);
     }
     if (l->g->kind == HLD_SYM_IMPORT) return 1;
     return L->shared && l->g->kind == HLD_SYM_DEFINED;
@@ -582,8 +583,27 @@ int hld_fill_dynamic(hld_link *L)
              * started being honoured.
              */
             if (!l->g || l->g->kind != HLD_SYM_IMPORT) {
-                reladyn_anchored(L, L->dltsec->addr + l->slot,
-                                 hld_target_addr(l->g, l->in, l->off),
+                uint64_t a;
+                if (l->kind == HLD_DLT_FPTR) {
+                    /*
+                     * The slot holds the address of OUR OWN descriptor, not
+                     * of the code -- so what moves with the load is the .opd
+                     * entry. Code that takes a local function's address
+                     * reads this slot; without the relocation it gets the
+                     * link-time address of a descriptor that is now
+                     * somewhere else, and calls through it.
+                     */
+                    lnkent *d2 = hld_opd_find(L, l->g, l->in, l->off);
+                    if (!d2) {
+                        snprintf(L->err, HLD_ERRSZ, "internal: no descriptor "
+                                 "for a local function whose address is taken");
+                        return -1;
+                    }
+                    a = L->opdsec->addr + d2->slot;
+                } else {
+                    a = hld_target_addr(l->g, l->in, l->off);
+                }
+                reladyn_anchored(L, L->dltsec->addr + l->slot, a,
                                  R_IA64_DIR64MSB);
                 continue;
             }

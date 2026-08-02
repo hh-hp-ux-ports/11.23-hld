@@ -438,6 +438,45 @@ if $CC -mlp64 -O2 -fPIC -c $W/ety.c -o $W/ety.o 2> $W/cc.err; then
     fi
 fi
 
+# --- a local function's address formed in code -----------------------------
+# Not read from a relocated data table: materialised by the code itself and
+# stored somewhere the caller owns. The slot holding the descriptor's address
+# still moves with the load, and without its relocation the code calls through
+# a descriptor that is no longer there. This is zlib's deflateInit_ shape.
+CHECKS=`expr $CHECKS + 1`
+cat > $W/fna.c <<'CEOF'
+typedef int (*alloc_f)(int,int);
+typedef struct { alloc_f za; } strm_t;
+static int fna_alloc(int n, int size) { return n * size + 1; }
+int fna_init(strm_t *s) {
+    if (s->za == (alloc_f)0) s->za = fna_alloc;
+    return s->za(6, 7);
+}
+CEOF
+cat > $W/fnamain.c <<'CEOF'
+typedef int (*alloc_f)(int,int);
+typedef struct { alloc_f za; } strm_t;
+extern int fna_init(strm_t *);
+int main(void) { strm_t s; s.za = 0; return fna_init(&s) == 43 ? 7 : 1; }
+CEOF
+if $CC -mlp64 -O2 -fPIC -c $W/fna.c -o $W/fna.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h libfna.so -o $W/libfna.so $W/fna.o 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        $CC -mlp64 -o $W/fnaprog $W/fnamain.c -L$W -lfna 2> $W/link.err
+        SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/fnaprog
+        rc=$?
+        if [ $rc -ne 7 ]; then
+            echo "FAIL: a local function address formed in code gave $rc,"
+            echo "      expected 7 (the descriptor-address slot is unrelocated)"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: could not link the address-in-code fixture:"
+        cat $W/link.err; FAIL=1
+    fi
+fi
+
 # --- hidden visibility must not be exported --------------------------------
 # libgcc's millicode and anything marked visibility("hidden") are not part of
 # a library's interface. Exporting them offers them for interposition, which
