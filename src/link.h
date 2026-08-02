@@ -271,6 +271,7 @@ typedef struct {
     const char *soname;       /* +h, or the output's basename */
     uint32_t soname_strx;
     int no_runpath;           /* +nodefaultrpath */
+    int whole_archive;        /* --whole-archive: take every member */
     char **rpaths;            /* +b, searched ahead of the -L list */
     size_t nrpaths, rpaths_cap;
     uint32_t runpath_strx;
@@ -333,6 +334,7 @@ osec *osec_find_pub(hld_link *L, const char *name);
 /* archive.c */
 int  hld_archive_open(hld_link *L, const char *path, hld_archive **out);
 int  hld_archive_search(hld_link *L, hld_archive *ar, int *extracted_any);
+int  hld_archive_take_all(hld_link *L, hld_archive *ar, int *extracted_any);
 void hld_archive_free(hld_archive *ar);
 int  hld_link_millicode(hld_link *L);
 

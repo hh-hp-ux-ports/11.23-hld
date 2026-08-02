@@ -56,6 +56,8 @@ static void usage(void)
         "  +h NAME      the name it records for itself (DT_SONAME); -soname too\n"
         "  +b DIRS      where the loader should search at run time (DT_RUNPATH);\n"
         "               the -L list is recorded too unless +nodefaultrpath\n"
+        "  --whole-archive ... --no-whole-archive   take EVERY member of the\n"
+        "               archives in between, not only those referenced\n"
         "  --start-group ... --end-group   re-search these archives until\n"
         "               nothing further is pulled in\n"
         "  -V, --version  print version and licence\n"
@@ -166,6 +168,14 @@ int main(int argc, char **argv)
             L.entry_name = NULL;
             continue;
         }
+        /*
+         * --whole-archive takes every member of the archives that follow it,
+         * referenced or not; --no-whole-archive goes back to taking only what
+         * is needed. Positional, as in the GNU linker, so one archive can be
+         * embedded wholesale while the rest of the link stays ordinary.
+         */
+        if (strcmp(a, "--whole-archive") == 0) { L.whole_archive = 1; continue; }
+        if (strcmp(a, "--no-whole-archive") == 0) { L.whole_archive = 0; continue; }
         if (strcmp(a, "--start-group") == 0 || strcmp(a, "-(") == 0) {
             in_group = 1;
             ngroup = 0;

@@ -213,6 +213,32 @@ else
     ran="(not run: needs HP-UX/ia64)"
 fi
 
+# --- --whole-archive takes members nothing references ----------------------
+# Embedding a static library INTO a shared library is the job this exists for:
+# without it an archive that nothing references contributes nothing, which is
+# correct archive semantics and not what that job wants.
+CHECKS=`expr $CHECKS + 1`
+if $HLD -b +h libwa.so --whole-archive -o $W/wa.so $W/libtest.a 2> $W/link.err; then
+    got=`$RE -s $W/wa.so 2>/dev/null \
+         | awk '/\.dynsym/{f=1;next} /\.symtab/{f=0} f' | grep -c never_referenced`
+    if [ "$got" = "0" ]; then
+        echo "FAIL: --whole-archive did not take the unreferenced member"
+        FAIL=1
+    fi
+else
+    echo "FAIL: --whole-archive link failed:"; cat $W/link.err; FAIL=1
+fi
+CHECKS=`expr $CHECKS + 1`
+if $HLD -b +h libwa.so --whole-archive --no-whole-archive -o $W/wa2.so $W/libtest.a \
+        2> $W/link.err; then
+    got=`$RE -s $W/wa2.so 2>/dev/null \
+         | awk '/\.dynsym/{f=1;next} /\.symtab/{f=0} f' | grep -c never_referenced`
+    if [ "$got" != "0" ]; then
+        echo "FAIL: --no-whole-archive did not turn it back off"
+        FAIL=1
+    fi
+fi
+
 if [ $FAIL -eq 0 ]; then
     echo "OK: archive checks passed ($CHECKS checks) $ran"
 else

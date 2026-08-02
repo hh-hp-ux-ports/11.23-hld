@@ -309,12 +309,58 @@ int hld_archive_open(hld_link *L, const char *path, hld_archive **out)
  * Search one archive against the currently undefined symbols, repeating until
  * a pass pulls nothing: a member just extracted may itself reference another.
  */
+/* Shared by both paths: validate the member and hand it to the linker. */
+static int extract_member(hld_link *L, hld_archive *ar, armember *m)
+{
+    if (!m->elf) {
+        aerr(L, "%s(%s): not a usable object", ar->path, m->name);
+        return -1;
+    }
+    if (m->elf->eh.type != ET_REL
+        || m->elf->eh.machine != EM_IA_64
+        || !(m->elf->eh.flags & EF_IA_64_ABI64)) {
+        snprintf(L->err, HLD_ERRSZ,
+                 "%s(%s): not an LP64 IA-64 object — wrong library "
+                 "for this ABI", ar->path, m->name);
+        return -1;
+    }
+    m->extracted = 1;
+    return hld_input_object(L, m->elf);
+}
+
+/*
+ * --whole-archive: take every member, referenced or not. The point is to
+ * build a shared library whose contents ARE a static library -- without it an
+ * archive that nothing references contributes nothing, which is correct
+ * archive semantics and not what that job wants.
+ */
+int hld_archive_take_all(hld_link *L, hld_archive *ar, int *extracted_any)
+{
+    size_t mi;
+
+    if (extracted_any) *extracted_any = 0;
+    for (mi = 0; mi < ar->nmembers; mi++) {
+        armember *m = &ar->members[mi];
+        if (m->extracted) continue;
+        /*
+         * Members that are not ELF at all are skipped rather than fatal: an
+         * archive may legitimately carry a README or a symbol index we do
+         * not use. A member that IS ELF but wrong is still an error.
+         */
+        if (!m->elf) continue;
+        if (extract_member(L, ar, m) < 0) return -1;
+        if (extracted_any) *extracted_any = 1;
+    }
+    return 0;
+}
+
 int hld_archive_search(hld_link *L, hld_archive *ar, int *extracted_any)
 {
     int changed;
     unsigned h;
     hld_gsym *g;
 
+    if (L->whole_archive) return hld_archive_take_all(L, ar, extracted_any);
     if (extracted_any) *extracted_any = 0;
     do {
         changed = 0;
@@ -336,20 +382,7 @@ int hld_archive_search(hld_link *L, hld_archive *ar, int *extracted_any)
                 m = &ar->members[mi];
                 if (m->extracted) continue;
 
-                if (!m->elf) {
-                    aerr(L, "%s(%s): not a usable object", ar->path, m->name);
-                    return -1;
-                }
-                if (m->elf->eh.type != ET_REL
-                    || m->elf->eh.machine != EM_IA_64
-                    || !(m->elf->eh.flags & EF_IA_64_ABI64)) {
-                    snprintf(L->err, HLD_ERRSZ,
-                             "%s(%s): not an LP64 IA-64 object — wrong library "
-                             "for this ABI", ar->path, m->name);
-                    return -1;
-                }
-                m->extracted = 1;
-                if (hld_input_object(L, m->elf) < 0) return -1;
+                if (extract_member(L, ar, m) < 0) return -1;
                 changed = 1;
                 if (extracted_any) *extracted_any = 1;
             }
