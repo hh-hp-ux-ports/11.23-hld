@@ -15,7 +15,7 @@
 #ifndef HLD_VERSION_H
 #define HLD_VERSION_H
 
-#define HLD_VERSION "0.9.13"
+#define HLD_VERSION "0.9.14"
 
 #define HLD_IDENT "@(#)hld " HLD_VERSION " - LP64 linker for HP-UX 11.23/IPF"
 

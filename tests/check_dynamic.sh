@@ -345,6 +345,26 @@ if $CC -mlp64 -fPIC -c $W/anch.c -o $W/anch.o 2> $W/cc.err; then
     fi
 fi
 
+# --- one library is one dependency, whatever it was found as ---------------
+# A library's identity is its SONAME, not the filename it was found under.
+# Reached as libc.so from one -L and libc.so.1 from another it is still one
+# dependency, and recording both puts the same name in DT_NEEDED twice.
+if [ -d $LIBDIR ]; then
+    CHECKS=`expr $CHECKS + 1`
+    rm -rf $W/altlib; mkdir -p $W/altlib
+    ln -s $LIBDIR/libc.so.1 $W/altlib/libc.so
+    if $HLD -b +h libdup.so -o $W/dup.so $W/shlib.o \
+            -L$W/altlib -lc -L$LIBDIR -lc 2> $W/link.err; then
+        n=`$RE -d $W/dup.so 2>/dev/null | grep -c "libc.so.1"`
+        if [ "$n" != "1" ]; then
+            echo "FAIL: libc.so.1 recorded $n times in DT_NEEDED, expected 1"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: linking one library under two names:"; cat $W/link.err; FAIL=1
+    fi
+fi
+
 # --- hidden visibility must not be exported --------------------------------
 # libgcc's millicode and anything marked visibility("hidden") are not part of
 # a library's interface. Exporting them offers them for interposition, which

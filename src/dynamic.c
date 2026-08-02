@@ -883,28 +883,10 @@ static int add_dso(hld_link *L, const char *path, int indirect)
     char err[HLD_ERRSZ];
     hld_elf *e;
     hld_dso *d;
-    const char *base0;
     uint32_t i;
     const char *base;
     char needed[16][128];
     size_t nneeded = 0;
-
-    /*
-     * A library named on the command line may already be loaded because
-     * something else depends on it. It is the same library: promote the entry
-     * to a direct dependency rather than adding a second one, or DT_NEEDED
-     * lists it twice.
-     */
-    base0 = strrchr(path, '/');
-    base0 = base0 ? base0 + 1 : path;
-    if (!indirect) {
-        hld_dso *prev = dso_find(L, base0);
-        if (prev) {
-            prev->indirect = 0;
-            prev->needed = 1;
-            return hld_bind_imports(L);
-        }
-    }
 
     e = hld_elf_load(path, err);
     if (!e) { snprintf(L->err, HLD_ERRSZ, "%s", err); return -1; }
@@ -976,6 +958,24 @@ static int add_dso(hld_link *L, const char *path, int indirect)
     }
 
     d->indirect = indirect;
+    /*
+     * The SONAME is the library's identity, not the filename it was found
+     * under: the same library reached as `libc.so' from one -L and
+     * `libc.so.1' from another is ONE dependency, and recording both puts
+     * the same name in DT_NEEDED twice. Checked here rather than before the
+     * load, because until the file is read there is no identity to check --
+     * which is why a basename test passed on fixtures and missed a real
+     * library.
+     */
+    {
+        hld_dso *prev = dso_find(L, d->soname);
+        if (prev) {
+            if (!indirect) { prev->indirect = 0; prev->needed = 1; }
+            hld_elf_free(e);
+            free(d);
+            return hld_bind_imports(L);
+        }
+    }
     if (!L->dsos) { L->dsos = d; L->dso_tail = &d->next; }
     else { *L->dso_tail = d; L->dso_tail = &d->next; }
     L->ndsos++;
