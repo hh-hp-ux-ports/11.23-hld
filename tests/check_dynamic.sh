@@ -345,6 +345,36 @@ if $CC -mlp64 -fPIC -c $W/anch.c -o $W/anch.o 2> $W/cc.err; then
     fi
 fi
 
+# --- hidden visibility must not be exported --------------------------------
+# libgcc's millicode and anything marked visibility("hidden") are not part of
+# a library's interface. Exporting them offers them for interposition, which
+# is how a program ends up calling a different library's division helper than
+# the one it was built against.
+CHECKS=`expr $CHECKS + 1`
+cat > $W/vis.c <<'CEOF'
+__attribute__((visibility("hidden"))) int vis_hidden(void) { return 1; }
+int vis_public(void) { return vis_hidden() + 1; }
+CEOF
+if $CC -mlp64 -fPIC -c $W/vis.c -o $W/vis.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h libvis.so -o $W/libvis.so $W/vis.o 2> $W/link.err; then
+        dyn=`$RE -s $W/libvis.so 2>/dev/null \
+             | awk '/\.dynsym/{f=1;next} /\.symtab/{f=0} f'`
+        CHECKS=`expr $CHECKS + 1`
+        if printf '%s\n' "$dyn" | grep vis_public > /dev/null 2>&1; then :; else
+            echo "FAIL: the library does not export vis_public"
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        if printf '%s\n' "$dyn" | grep vis_hidden > /dev/null 2>&1; then
+            echo "FAIL: the library exports vis_hidden, which is hidden"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: could not link the visibility fixture:"; cat $W/link.err; FAIL=1
+    fi
+fi
+
 # --- a library must not export the linker's own layout symbols -------------
 # `__gp', `_end', `_etext' and the rest describe one module's own layout. The
 # platform's libraries export none of them (checked against libc.so.1 and

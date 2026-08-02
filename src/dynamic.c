@@ -172,6 +172,18 @@ int hld_alloc_dynamic(hld_link *L)
                  * them lets another module bind to our addresses.
                  */
                 if (L->shared && hld_is_linker_symbol(g->name)) continue;
+                /*
+                 * Hidden and internal visibility mean "not part of this
+                 * module's interface" -- libgcc's millicode and anything
+                 * marked __attribute__((visibility("hidden"))). Exporting
+                 * them anyway offers them for interposition, which is how a
+                 * program ends up calling a different library's division
+                 * helper than the one it was built against.
+                 */
+                if (L->shared) {
+                    unsigned vis = g->other & 3;
+                    if (vis == STV_HIDDEN || vis == STV_INTERNAL) continue;
+                }
                 g->dynidx = nsym++;
             }
     L->ndynsym = nsym;
@@ -798,12 +810,17 @@ int hld_add_dso(hld_link *L, const char *path)
 }
 
 /* Already loaded, by soname or by path? */
-static int dso_loaded(hld_link *L, const char *soname)
+static hld_dso *dso_find(hld_link *L, const char *soname)
 {
     hld_dso *d;
     for (d = L->dsos; d; d = d->next)
-        if (d->soname && strcmp(d->soname, soname) == 0) return 1;
-    return 0;
+        if (d->soname && strcmp(d->soname, soname) == 0) return d;
+    return NULL;
+}
+
+static int dso_loaded(hld_link *L, const char *soname)
+{
+    return dso_find(L, soname) != NULL;
 }
 
 static int add_dso(hld_link *L, const char *path, int indirect)
@@ -811,10 +828,28 @@ static int add_dso(hld_link *L, const char *path, int indirect)
     char err[HLD_ERRSZ];
     hld_elf *e;
     hld_dso *d;
+    const char *base0;
     uint32_t i;
     const char *base;
     char needed[16][128];
     size_t nneeded = 0;
+
+    /*
+     * A library named on the command line may already be loaded because
+     * something else depends on it. It is the same library: promote the entry
+     * to a direct dependency rather than adding a second one, or DT_NEEDED
+     * lists it twice.
+     */
+    base0 = strrchr(path, '/');
+    base0 = base0 ? base0 + 1 : path;
+    if (!indirect) {
+        hld_dso *prev = dso_find(L, base0);
+        if (prev) {
+            prev->indirect = 0;
+            prev->needed = 1;
+            return hld_bind_imports(L);
+        }
+    }
 
     e = hld_elf_load(path, err);
     if (!e) { snprintf(L->err, HLD_ERRSZ, "%s", err); return -1; }
