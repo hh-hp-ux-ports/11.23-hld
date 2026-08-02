@@ -353,7 +353,7 @@ int hld_dlt_needs_loader(hld_link *L, const lnkent *l)
 
 /* The allocated section a segment anchor belongs to: the first one at or
  * after the segment base. A SECTION symbol has to name a real section. */
-static uint32_t seg_shndx(hld_link *L, uint64_t base)
+static osec *seg_anchor_sec(hld_link *L, uint64_t base)
 {
     osec *o, *best = NULL;
 
@@ -361,7 +361,20 @@ static uint32_t seg_shndx(hld_link *L, uint64_t base)
         if ((o->flags & SHF_ALLOC) && o->addr >= base
             && (!best || o->addr < best->addr))
             best = o;
-    return best ? best->shndx : 1;
+    return best;
+}
+
+/*
+ * The value an anchored relocation is measured from. A SECTION symbol names a
+ * section, and the loader resolves it to where THAT section landed -- so the
+ * addend has to be computed from the same section's address, not from the
+ * nominal segment base. Getting that wrong is silent: the arithmetic looks
+ * right at link time and lands at the wrong place once loaded.
+ */
+static uint64_t seg_anchor_addr(hld_link *L, uint64_t base)
+{
+    osec *o = seg_anchor_sec(L, base);
+    return o ? o->addr : base;
 }
 
 /* Append one entry to the relocation array the loader walks at load time. */
@@ -397,6 +410,19 @@ static void reladyn_add(hld_link *L, uint64_t where, uint32_t dynidx,
     L->nreladyn++;
 }
 
+/*
+ * Relocate an address of something defined in THIS module against the segment
+ * it lives in. No symbol is named, so nothing has to be exported -- which is
+ * what lets a hidden symbol be referenced from the library's own data.
+ */
+static void reladyn_anchored(hld_link *L, uint64_t at, uint64_t a, uint32_t type)
+{
+    int text = a < L->data_addr;
+    uint64_t base = seg_anchor_addr(L, text ? L->text_addr : L->data_addr);
+    reladyn_add(L, at, text ? L->anchor_text : L->anchor_data, type, a - base);
+}
+
+
 /* Fill the dynamic sections; called once every address is final. */
 int hld_fill_dynamic(hld_link *L)
 {
@@ -429,13 +455,19 @@ int hld_fill_dynamic(hld_link *L)
         uint8_t *e = L->dynsymsec->data + (size_t)L->anchor_text * SYM64_SIZE;
         st32(e + 0, 0);                                  /* no name */
         e[4] = (uint8_t)((STB_LOCAL << 4) | STT_SECTION);
-        st16(e + 6, (uint16_t)seg_shndx(L, L->text_addr));
-        st64(e + 8, L->text_addr);
+        {
+            osec *a = seg_anchor_sec(L, L->text_addr);
+            st16(e + 6, (uint16_t)(a ? a->shndx : 1));
+            st64(e + 8, a ? a->addr : L->text_addr);
+        }
         e = L->dynsymsec->data + (size_t)L->anchor_data * SYM64_SIZE;
         st32(e + 0, 0);
         e[4] = (uint8_t)((STB_LOCAL << 4) | STT_SECTION);
-        st16(e + 6, (uint16_t)seg_shndx(L, L->data_addr));
-        st64(e + 8, L->data_addr);
+        {
+            osec *a = seg_anchor_sec(L, L->data_addr);
+            st16(e + 6, (uint16_t)(a ? a->shndx : 1));
+            st64(e + 8, a ? a->addr : L->data_addr);
+        }
     }
     if (L->dynsymsec->data)
         for (h = 0; h < HLD_SYMHASH; h++)
@@ -500,18 +532,18 @@ int hld_fill_dynamic(hld_link *L)
         size_t n;
         for (l = L->dlt; l; l = l->next) {
             if (!hld_dlt_needs_loader(L, l)) continue;
-            if (!l->g) {
-                /*
-                 * A local target -- no symbol to name, so name the segment
-                 * it lives in and carry the rest in the addend, exactly as
-                 * the platform's linker does (`__text_seg + 3a8').
-                 */
-                uint64_t a = hld_target_addr(NULL, l->in, l->off);
-                int text = a < L->data_addr;
-                reladyn_add(L, L->dltsec->addr + l->slot,
-                            text ? L->anchor_text : L->anchor_data,
-                            R_IA64_DIR64MSB,
-                            a - (text ? L->text_addr : L->data_addr));
+            /*
+             * Only an IMPORT has to be named: the loader must find it by
+             * name in another module. Anything defined here is anchored on
+             * its segment instead -- which is also the only way to relocate
+             * a reference to a HIDDEN symbol, since that has no export to
+             * name. Naming it was a hard failure the moment visibility
+             * started being honoured.
+             */
+            if (!l->g || l->g->kind != HLD_SYM_IMPORT) {
+                reladyn_anchored(L, L->dltsec->addr + l->slot,
+                                 hld_target_addr(l->g, l->in, l->off),
+                                 R_IA64_DIR64MSB);
                 continue;
             }
             reladyn_needs_sym(L, l->g->dynidx, l->g->name);
@@ -524,13 +556,9 @@ int hld_fill_dynamic(hld_link *L)
             dynrel *dr = &L->dynrels[n];
             uint64_t at = dr->in->out->addr + dr->in->out_off + dr->off;
             if (dr->local) {
-                /* No symbol to name: anchor on the segment, as HP does. */
-                uint64_t a = hld_target_addr(dr->g, dr->tin, dr->toff)
-                             + dr->addend;
-                int text = a < L->data_addr;
-                reladyn_add(L, at, text ? L->anchor_text : L->anchor_data,
-                            dr->type,
-                            a - (text ? L->text_addr : L->data_addr));
+                reladyn_anchored(L, at,
+                                 hld_target_addr(dr->g, dr->tin, dr->toff)
+                                 + dr->addend, dr->type);
             } else {
                 reladyn_add(L, at, dr->g->dynidx, dr->type, dr->addend);
                 reladyn_needs_sym(L, dr->g->dynidx, dr->g->name);
