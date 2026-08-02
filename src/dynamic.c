@@ -305,10 +305,16 @@ int hld_alloc_dynamic(hld_link *L)
     for (l = L->dlt; l; l = l->next)
         if (hld_dlt_needs_loader(L, l)) L->ndltrel++;
 
-    if (nimp || L->ndltrel || L->ndynrel) {
+    /*
+     * In a library every function descriptor needs a relocation of its own:
+     * the loader writes {entry, gp} into it and neither word can be final at
+     * link time. In an executable both are final and none is needed.
+     */
+    L->nopdrel = L->shared ? L->nopd : 0;
+    if (nimp || L->ndltrel || L->ndynrel || L->nopdrel) {
         o = osec_get(L, ".rela.dyn", SHT_RELA, SHF_ALLOC);
         if (!o) return -1;
-        o->size = (nimp + L->ndltrel + L->ndynrel) * RELA64_SIZE;
+        o->size = (nimp + L->ndltrel + L->ndynrel + L->nopdrel) * RELA64_SIZE;
         o->align = 8;
         o->entsize = RELA64_SIZE;
         L->reladynsec = o;
@@ -561,6 +567,17 @@ int hld_fill_dynamic(hld_link *L)
                         l->kind == HLD_DLT_FPTR ? R_IA64_FPTR64MSB
                                                 : R_IA64_DIR64MSB, 0);
         }
+        /*
+         * Every descriptor in a library: EPLTMSB writes the whole 16-byte
+         * {entry, gp} record, anchored on the text segment the entry lives
+         * in. This is the form the platform's linker uses in .rela.opd.
+         */
+        if (L->shared && L->opdsec)
+            for (l = L->opd; l; l = l->next)
+                reladyn_anchored(L, L->opdsec->addr + l->slot,
+                                 hld_target_addr(l->g, l->in, l->off),
+                                 R_IA64_EPLTMSB);
+
         /* And the data words that hold another module's address. */
         for (n = 0; n < L->ndynrel; n++) {
             dynrel *dr = &L->dynrels[n];
@@ -573,9 +590,30 @@ int hld_fill_dynamic(hld_link *L)
                  * the first entry of a table (offset 0) and wrong for every
                  * one after it.
                  */
-                reladyn_anchored(L, at,
-                                 hld_target_addr(dr->g, dr->tin, dr->toff),
-                                 dr->type);
+                {
+                    uint64_t a = hld_target_addr(dr->g, dr->tin, dr->toff);
+                    uint32_t ty = dr->type;
+                    if (ty == R_IA64_FPTR64MSB || ty == R_IA64_FPTR64LSB) {
+                        /*
+                         * FPTR asks the LOADER to produce the canonical
+                         * descriptor, which it can only do for a function
+                         * belonging to another module. Ours are ours to
+                         * build: the word holds the address of our own .opd
+                         * entry, and it is that address which moves with the
+                         * load -- an ordinary pointer into the data segment.
+                         */
+                        lnkent *d2 = hld_opd_find(L, dr->g, dr->tin, dr->toff);
+                        if (!d2) {
+                            snprintf(L->err, HLD_ERRSZ, "internal: no "
+                                     "descriptor for a local function whose "
+                                     "address is taken");
+                            return -1;
+                        }
+                        a = L->opdsec->addr + d2->slot;
+                        ty = R_IA64_DIR64MSB;
+                    }
+                    reladyn_anchored(L, at, a, ty);
+                }
             } else {
                 reladyn_add(L, at, dr->g->dynidx, dr->type, dr->addend);
                 reladyn_needs_sym(L, dr->g->dynidx, dr->g->name);

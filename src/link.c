@@ -1009,7 +1009,7 @@ static lnkent *pltoff_get(hld_link *L, hld_gsym *g, isec *in, uint64_t off)
 }
 
 /* The descriptor allocated for a target, if any. */
-static lnkent *opd_find(hld_link *L, hld_gsym *g, isec *in, uint64_t off)
+lnkent *hld_opd_find(hld_link *L, hld_gsym *g, isec *in, uint64_t off)
 {
     lnkent *l;
     for (l = L->opd_hash[lnk_hash(g, in, off)]; l; l = l->hnext)
@@ -1236,8 +1236,6 @@ oom:
      * executable they are fully resolved at link time, so they can live in the
      * read-only text segment (which is where HP's linker puts them too).
      */
-    if (L->nopd && L->shared && L->opdsec)
-        L->opdsec->flags |= SHF_WRITE;   /* a library's descriptors are data */
     if (L->ndlt) {
         L->dltsec = osec_get(L, ".dlt", SHT_PROGBITS,
                              SHF_ALLOC | SHF_WRITE | SHF_IA_64_SHORT);
@@ -1256,7 +1254,15 @@ oom:
         L->pltoffsec->entsize = 16;
     }
     if (L->nopd) {
-        L->opdsec = osec_get(L, ".opd", SHT_PROGBITS, SHF_ALLOC);
+        /*
+         * In a library a descriptor's gp word is written by the LOADER, so
+         * .opd has to be writable and land in the data segment -- which is
+         * where the platform's linker puts it (measured: HP .opd is WA at
+         * 6000000000000020, ours was A in the text segment). Read-only was
+         * right for an executable, where both words are final at link time.
+         */
+        L->opdsec = osec_get(L, ".opd", SHT_PROGBITS,
+                             L->shared ? (SHF_ALLOC | SHF_WRITE) : SHF_ALLOC);
         if (!L->opdsec) { lerr(L, "out of memory", NULL, NULL); return -1; }
         L->opdsec->size = L->nopd * 16;
         L->opdsec->align = 16;
@@ -1326,7 +1332,7 @@ int hld_build_contents(hld_link *L)
                  */
                 v = l->kind == HLD_DLT_FPTR ? 0 : l->g->hint;
             } else if (l->kind == HLD_DLT_FPTR) {
-                lnkent *d = opd_find(L, l->g, l->in, l->off);
+                lnkent *d = hld_opd_find(L, l->g, l->in, l->off);
                 v = d ? L->opdsec->addr + d->slot : 0;
             } else if (l->kind == HLD_DLT_TPREL) {
                 v = hld_target_addr(l->g, l->in, l->off) - L->tls_base;
@@ -1546,7 +1552,7 @@ int hld_relocate(hld_link *L)
                 case R_IA64_FPTR32LSB:
                 case R_IA64_FPTR64MSB:
                 case R_IA64_FPTR64LSB:
-                    ent = opd_find(L, tg, tin, toff);
+                    ent = hld_opd_find(L, tg, tin, toff);
                     if (!ent) {
                         snprintf(L->err, HLD_ERRSZ,
                                  "%s: no descriptor allocated for `%s'",

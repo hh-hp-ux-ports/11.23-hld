@@ -365,6 +365,48 @@ if [ -d $LIBDIR ]; then
     fi
 fi
 
+# --- a library's own function pointers need descriptors --------------------
+# A pointer to one of the library's own functions is the address of a
+# DESCRIPTOR {entry, gp}, and the loader writes the gp word -- so .opd has to
+# be writable and in the data segment, the data word points at the descriptor,
+# and the descriptor itself is relocated. Getting it wrong does not fault
+# cleanly: control reaches something that is not the function.
+CHECKS=`expr $CHECKS + 1`
+cat > $W/fpt.c <<'CEOF'
+static int f_a(void) { return 10; }
+static int f_b(void) { return 20; }
+static int f_c(void) { return 30; }
+static int (* const tab[])(void) = { f_a, f_b, f_c };
+int call_nth(int i) { return tab[i](); }
+CEOF
+cat > $W/fptmain.c <<'CEOF'
+extern int call_nth(int);
+int main(void) { return call_nth(2) == 30 ? 7 : 1; }
+CEOF
+if $CC -mlp64 -O2 -fPIC -c $W/fpt.c -o $W/fpt.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h libfpt.so -o $W/libfpt.so $W/fpt.o 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        # .opd must be writable, or the loader cannot fill the gp word
+        if $RE -S $W/libfpt.so 2>/dev/null | grep '\.opd' | grep 'WA' > /dev/null 2>&1
+        then :; else
+            echo "FAIL: .opd is not writable in a shared library"
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        $CC -mlp64 -o $W/fptprog $W/fptmain.c -L$W -lfpt 2> $W/link.err
+        SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/fptprog
+        rc=$?
+        if [ $rc -ne 7 ]; then
+            echo "FAIL: calling through the library's own function-pointer"
+            echo "      table gave $rc, expected 7"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: could not link the descriptor fixture:"; cat $W/link.err; FAIL=1
+    fi
+fi
+
 # --- hidden visibility must not be exported --------------------------------
 # libgcc's millicode and anything marked visibility("hidden") are not part of
 # a library's interface. Exporting them offers them for interposition, which

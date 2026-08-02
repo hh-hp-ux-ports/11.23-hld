@@ -289,6 +289,7 @@ typedef struct {
     int reladyn_nosym;
     hld_dso *dsos, **dso_tail;
     size_t ndsos, nimports;
+    uint64_t nopdrel;
     uint64_t ndltrel;         /* DLT slots the loader has to fill */
     dynrel *dynrels;          /* data words naming another module's symbol */
     size_t ndynrel, dynrel_cap;
@@ -347,6 +348,7 @@ int  hld_find_library(hld_link *L, const char *name, hld_archive **ar_out);
 int  hld_predefine_symbols(hld_link *L);
 int  hld_is_linker_symbol(const char *name);
 uint64_t hld_target_addr(hld_gsym *g, isec *in, uint64_t off);
+lnkent *hld_opd_find(hld_link *L, hld_gsym *g, isec *in, uint64_t off);
 int  hld_bind_imports(hld_link *L);
 int  hld_alloc_dynamic(hld_link *L);
 int  hld_add_ident(hld_link *L);
