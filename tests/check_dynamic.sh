@@ -758,6 +758,59 @@ CEOF
     fi
 fi
 
+# --- a library's own exported calls stay interposable -----------------------
+# A program may replace a symbol its library uses internally -- C++ requires
+# exactly that for operator new. Binding those calls at link time instead
+# produces a library that works, links cleanly, and quietly ignores the
+# replacement. The pointer test matters as much: if the call interposes but
+# the address does not, one function has two addresses in one process.
+cat > $W/int.c <<'CEOF'
+int int_impl(void) { return 1; }
+typedef int (*int_fp)(void);
+int int_direct(void) { return int_impl(); }
+int_fp int_addr(void) { return int_impl; }
+CEOF
+cat > $W/intmain.c <<'CEOF'
+#include <stdio.h>
+typedef int (*int_fp)(void);
+extern int int_direct(void);
+extern int_fp int_addr(void);
+int int_impl(void) { return 2; }          /* the program replaces it */
+int main(void) {
+    int_fp p = int_addr();
+    printf("%d %d %d\n", int_direct(), p(), (void *)p == (void *)int_impl);
+    return 0;
+}
+CEOF
+if $CC -mlp64 -O2 -fPIC -c $W/int.c -o $W/int.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h libint.so -o $W/libint.so $W/int.o 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        $CC -mlp64 -o $W/intprog $W/intmain.c -L$W -lint 2> $W/link.err
+        got=`SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/intprog`
+        if [ "$got" != "2 2 1" ]; then
+            echo "FAIL: interposition: got '$got', expected '2 2 1'"
+            echo "      (direct call, via pointer, addresses equal)"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: linking the interposition fixture:"; cat $W/link.err; FAIL=1
+    fi
+    # -B symbolic is the opt-out, and has to actually opt out
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h libint.so -B symbolic -o $W/libint.so $W/int.o \
+            2> $W/link.err; then
+        $CC -mlp64 -o $W/intprog2 $W/intmain.c -L$W -lint 2> $W/link.err
+        got=`SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/intprog2`
+        if [ "$got" != "1 1 0" ]; then
+            echo "FAIL: -B symbolic: got '$got', expected '1 1 0'"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: -B symbolic was not accepted:"; cat $W/link.err; FAIL=1
+    fi
+fi
+
 # --- +e decides what a library offers ---------------------------------------
 # Naming any symbol restricts the export list to those named, which is the
 # platform linker's rule. Calls to a symbol left out still resolve inside the
