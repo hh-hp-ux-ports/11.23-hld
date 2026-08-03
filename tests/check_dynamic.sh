@@ -234,8 +234,15 @@ fi
 # Which linker produced a binary is the first question asked when one is
 # suspected of building it wrong. The stamp is in the platform's `what`
 # format, so `what` reports it for anything hld linked.
+# Ask `what', not `strings': HP's strings does not report this stamp at all
+# (measured — it finds nothing where GNU strings finds it), so the check used
+# to pass or fail on which one came first on PATH. `what' is the tool the
+# format exists for and is always present. Match the stamp TEXT rather than
+# the string "hld", which also occurs in the path of anyone whose checkout is
+# named after the linker.
 CHECKS=`expr $CHECKS + 1`
-if strings $W/hello 2>/dev/null | grep '@(#)hld ' > /dev/null 2>&1; then :; else
+if what $W/hello 2>/dev/null | grep 'LP64 linker for HP-UX' > /dev/null 2>&1
+then :; else
     echo "FAIL: the linked program carries no linker identification"
     FAIL=1
 fi
@@ -748,6 +755,86 @@ CEOF
     else
         echo "FAIL: compiling the C++ test:"; cat $W/cxx.err
         FAIL=1
+    fi
+fi
+
+# --- a library may leave symbols for the loader to bind ---------------------
+# Leaving a symbol undefined is what a shared library is for: gcc's LIB_SPEC
+# is %{!shared:...}, so a plain `gcc -shared' passes no -lc at all. The types
+# matter as much as the link succeeding -- a compiler marks a function it
+# calls FUNC and leaves an undefined variable NOTYPE, and giving the variable
+# a descriptor is how a data reference ends up going through one.
+cat > $W/undef.c <<'CEOF'
+extern int printf(const char *, ...);
+extern int shared_counter;              /* data: the program defines it */
+int undef_val(void)
+{
+    shared_counter += 5;
+    printf("%d\n", shared_counter);
+    return shared_counter;
+}
+CEOF
+cat > $W/undefmain.c <<'CEOF'
+int shared_counter = 2;
+extern int undef_val(void);
+int main(void) { return undef_val(); }
+CEOF
+if $CC -mlp64 -O2 -fPIC -c $W/undef.c -o $W/undef.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    # no -lc, and nothing else defines either symbol
+    if $HLD -b +h libundef.so -o $W/libundef.so $W/undef.o 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        # the called function keeps FUNC; the variable must stay NOTYPE
+        t=`$RE -s $W/libundef.so 2>/dev/null \
+           | grep -w printf | head -1 | awk '{print $4}'`
+        if [ "$t" != "FUNC" ]; then
+            echo "FAIL: imported printf typed '$t', expected FUNC"
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        t=`$RE -s $W/libundef.so 2>/dev/null \
+           | grep -w shared_counter | head -1 | awk '{print $4}'`
+        if [ "$t" = "FUNC" ]; then
+            echo "FAIL: imported variable shared_counter typed FUNC;"
+            echo "      a data reference would go through a descriptor"
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        # exactly one descriptor: for the function, not the variable
+        n=`$RE -r $W/libundef.so 2>/dev/null | grep -c IPLTMSB`
+        if [ "$n" != "1" ]; then
+            echo "FAIL: $n descriptors for one imported function, expected 1"
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        # and it must actually bind and run: 2 + 5
+        $CC -mlp64 -o $W/undefprog $W/undefmain.c -L$W -lundef 2> $W/link.err
+        SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/undefprog
+        rc=$?
+        if [ $rc -ne 7 ]; then
+            echo "FAIL: library with undefined symbols exited $rc, expected 7"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: a shared library may leave symbols undefined:"
+        cat $W/link.err
+        FAIL=1
+    fi
+    # ...but a program may not: nothing is loaded after it to supply one.
+    CHECKS=`expr $CHECKS + 1`
+    cat > $W/nodef.c <<'CEOF'
+extern int nowhere_at_all(void);
+int main(void) { return nowhere_at_all(); }
+CEOF
+    if $CC -mlp64 -c $W/nodef.c -o $W/nodef.o 2> $W/cc.err; then
+        if $HLD -o $W/nodef $W/nodef.o -L$LIBDIR -lc 2> $W/link.err; then
+            echo "FAIL: a program with an undefined symbol linked anyway"
+            FAIL=1
+        elif grep 'undefined symbol' $W/link.err > /dev/null 2>&1; then :; else
+            echo "FAIL: undefined symbol in a program gave the wrong error:"
+            cat $W/link.err
+            FAIL=1
+        fi
     fi
 fi
 
