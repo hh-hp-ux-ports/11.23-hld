@@ -75,6 +75,7 @@ typedef struct hld_gsym {
     uint64_t size;
     uint8_t type, bind, other;
     uint8_t has_plt;          /* an import we call: has a descriptor + stub */
+    uint8_t export_named;     /* named by +e/+ee: export even under a list */
     int short_common;         /* COMMON belongs in the short bss (.sbss) */
     isec *in;                 /* defining input section (DEFINED) */
     uint64_t in_off;          /* offset within that input section */
@@ -278,6 +279,14 @@ typedef struct {
     size_t nrpaths, rpaths_cap;
     uint32_t runpath_strx;
     /*
+     * +e/+ee name what the module offers. Naming any symbol restricts the
+     * export list to those named, which is what the platform's linker does;
+     * +hideallsymbols asks for the restriction without naming anything.
+     */
+    char **exports;
+    size_t nexports, exports_cap;
+    int hide_all;             /* +hideallsymbols */
+    /*
      * A shared library relocates addresses of its own data against a segment
      * anchor: a LOCAL SECTION symbol in .dynsym, with the offset carried in
      * the addend. This is what the platform's linker does, and it is the only
@@ -347,6 +356,8 @@ int  hld_link_millicode(hld_link *L);
 int  hld_add_dso(hld_link *L, const char *path);
 int  hld_add_libpath(hld_link *L, const char *dir);
 int  hld_add_rpath(hld_link *L, const char *dir);
+int  hld_add_export(hld_link *L, const char *name);
+int  hld_apply_exports(hld_link *L);
 int  hld_find_library(hld_link *L, const char *name, hld_archive **ar_out);
 int  hld_predefine_symbols(hld_link *L);
 int  hld_is_linker_symbol(const char *name);

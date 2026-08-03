@@ -57,6 +57,9 @@ static void usage(void)
         "  +b DIRS      where the loader should search at run time (DT_RUNPATH);\n"
         "               the -L list is recorded too unless +nodefaultrpath\n"
         "  -rdynamic    accepted; an executable already exports every global\n"
+        "  +e SYM       export SYM; naming any symbol exports ONLY those named\n"
+        "               (+ee is the same here), and +hideallsymbols restricts\n"
+        "               without naming one\n"
         "  +noallowunsats  an unsatisfied symbol is an error even in a\n"
         "               library, where it is otherwise left for the loader\n"
         "               to bind; --no-undefined too\n"
@@ -112,8 +115,27 @@ int main(int argc, char **argv)
                 L.no_runpath = 1;    /* do not record the -L list in the image */
                 continue;
             }
-            if (strcmp(a, "+Accept") == 0 || strcmp(a, "+e") == 0) {
+            if (strcmp(a, "+Accept") == 0) {
                 if (i + 1 < argc) ++i;
+                continue;
+            }
+            /*
+             * +e names a symbol this module offers, and naming any restricts
+             * the export list to those named. +ee is the same offer plus a
+             * promise not to eliminate the symbol as dead; hld eliminates
+             * nothing, so the two coincide here.
+             *
+             * These used to be accepted and discarded, which exported
+             * everything and said nothing -- the failure this linker refuses
+             * elsewhere, and worse than rejecting the option would have been.
+             */
+            if (strcmp(a, "+e") == 0 || strcmp(a, "+ee") == 0) {
+                if (i + 1 >= argc) goto need_arg;
+                if (hld_add_export(&L, argv[++i]) < 0) goto fail;
+                continue;
+            }
+            if (strcmp(a, "+hideallsymbols") == 0) {
+                L.hide_all = 1;
                 continue;
             }
             /*
@@ -330,6 +352,8 @@ int main(int argc, char **argv)
      */
     if (hld_import_undefined(&L) < 0) goto fail;
     phase("import-undefined");
+    /* +e names symbols, so it can only be applied once they all exist. */
+    if (hld_apply_exports(&L) < 0) goto fail;
     if (hld_alloc_unwind(&L) < 0) goto fail;
     phase("alloc-unwind");
     if (hld_alloc_linkage(&L) < 0) goto fail;

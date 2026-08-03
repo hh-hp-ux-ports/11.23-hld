@@ -227,6 +227,16 @@ int hld_alloc_dynamic(hld_link *L)
                     unsigned vis = g->other & 3;
                     if (vis == STV_HIDDEN || vis == STV_INTERNAL) continue;
                 }
+                /*
+                 * An export list says what the module offers, and naming any
+                 * symbol restricts it to those named -- the platform's
+                 * linker's rule, and the reason it needs no separate "hide
+                 * the rest" switch. +hideallsymbols restricts without naming.
+                 * Calls to a symbol left out still resolve inside the module;
+                 * only the offer to other modules is withdrawn.
+                 */
+                if ((L->nexports || L->hide_all) && !g->export_named)
+                    continue;
                 g->dynidx = nsym++;
             }
     L->ndynsym = nsym;
@@ -890,6 +900,38 @@ int hld_add_libpath(hld_link *L, const char *dir)
 int hld_add_rpath(hld_link *L, const char *dir)
 {
     return dirvec_add(&L->rpaths, &L->nrpaths, &L->rpaths_cap, dir);
+}
+
+int hld_add_export(hld_link *L, const char *name)
+{
+    return dirvec_add(&L->exports, &L->nexports, &L->exports_cap, name);
+}
+
+/*
+ * Mark what +e named, once, after resolution. Looking each name up in the
+ * symbol table costs one lookup per name; testing every symbol against the
+ * list instead would be a scan per symbol, which on a library the size of
+ * libstdc++ is the kind of product this linker has paid for before.
+ *
+ * A named symbol that nothing defines is worth saying out loud: it is
+ * usually a typo or a name that changed, and the silent result -- an export
+ * list quietly one symbol short -- is discovered by a consumer much later.
+ */
+int hld_apply_exports(hld_link *L)
+{
+    size_t i;
+
+    for (i = 0; i < L->nexports; i++) {
+        hld_gsym *g = hld_sym_lookup(L, L->exports[i]);
+
+        if (!g || (g->kind != HLD_SYM_DEFINED && g->kind != HLD_SYM_ABS)) {
+            fprintf(stderr, "hld: warning: +e names `%s', which this link "
+                            "does not define\n", L->exports[i]);
+            continue;
+        }
+        g->export_named = 1;
+    }
+    return 0;
 }
 
 
