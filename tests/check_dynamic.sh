@@ -758,6 +758,52 @@ CEOF
     fi
 fi
 
+# --- static functions and variables keep their names ------------------------
+# A `static' is never interned globally, so unless the output symbol table is
+# built from each object's own symbols it has no name at all: `nm', a profiler
+# and a crash dump can say nothing about it. Debug info is separate and was
+# never affected -- this is about a binary built without -g.
+cat > $W/loc.c <<'CEOF'
+static int hld_local_tab[4] = {1, 2, 3, 4};
+static int hld_local_fn(int x) { return x + hld_local_tab[0]; }
+int main(void) { return hld_local_fn(1) - 2; }
+CEOF
+if $CC -mlp64 -O0 -c $W/loc.c -o $W/loc.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -dynamic -e _start -o $W/locprog $W/crt_min.o $W/loc.o \
+            -L$LIBDIR -lc 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        for s in hld_local_fn hld_local_tab; do
+            if $RE -s $W/locprog 2>/dev/null | grep -w $s | grep LOCAL \
+               > /dev/null 2>&1; then :; else
+                echo "FAIL: static \`$s' has no LOCAL entry in .symtab"
+                FAIL=1
+            fi
+        done
+        # ELF requires every local before any global, and sh_info says where
+        # the globals start -- a table that violates it misleads every reader.
+        CHECKS=`expr $CHECKS + 1`
+        $RE -s $W/locprog 2>/dev/null | awk '
+            /Symbol table .\.symtab/ { insym = 1; n = 0; next }
+            /Symbol table/           { insym = 0 }
+            insym && /LOCAL/         { n++; lastlocal = n }
+            insym && /GLOBAL|WEAK/   { n++; if (!firstglobal) firstglobal = n }
+            END { if (firstglobal && lastlocal > firstglobal) exit 1; exit 0 }
+        ' || {
+            echo "FAIL: a GLOBAL precedes a LOCAL in .symtab"
+            FAIL=1
+        }
+        CHECKS=`expr $CHECKS + 1`
+        $W/locprog
+        if [ $? -ne 0 ]; then
+            echo "FAIL: program with statics did not run correctly"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: linking the statics fixture:"; cat $W/link.err; FAIL=1
+    fi
+fi
+
 # --- a library may leave symbols for the loader to bind ---------------------
 # Leaving a symbol undefined is what a shared library is for: gcc's LIB_SPEC
 # is %{!shared:...}, so a plain `gcc -shared' passes no -lc at all. The types
