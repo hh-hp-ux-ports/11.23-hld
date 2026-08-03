@@ -758,6 +758,89 @@ CEOF
     fi
 fi
 
+# --- an export list is a library's alone ------------------------------------
+# An executable's exported symbols are not an interface anyone chooses: the C
+# library binds `_end' there. Restricting them produces an image the loader
+# refuses, and the link reports success, so only running it catches this.
+CHECKS=`expr $CHECKS + 1`
+cat > $W/xe.c <<'CEOF'
+#include <stdio.h>
+int main(void) { printf("xe-ran\n"); return 0; }
+CEOF
+if $CC -mlp64 -c $W/xe.c -o $W/xe.o 2> $W/cc.err; then
+    if $HLD -dynamic -e main +e main -o $W/xeprog $W/xe.o -L$LIBDIR -lc \
+            2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        got=`$W/xeprog 2>&1`
+        if [ "$got" != "xe-ran" ]; then
+            echo "FAIL: +e on an executable broke it: '$got'"
+            echo "      (an executable's exports are the C library's business)"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: +e on an executable did not link:"; cat $W/link.err; FAIL=1
+    fi
+fi
+
+# --- an option that takes an argument must not be prefix-matched ------------
+# HP's +vtype takes one. Swallowing it as a diagnostic-only `+v' switch leaves
+# the argument to be read as an input file -- silently linking one if a file
+# of that name exists.
+CHECKS=`expr $CHECKS + 1`
+if $HLD +vtype shared -o $W/vt.out $W/xe.o 2> $W/link.err; then
+    echo "FAIL: +vtype was accepted; its argument becomes an input file"
+    FAIL=1
+elif grep 'shared' $W/link.err > /dev/null 2>&1; then
+    echo "FAIL: +vtype left its argument to be read as a file:"
+    cat $W/link.err
+    FAIL=1
+fi
+CHECKS=`expr $CHECKS + 1`
+if $HLD +vshlibunsats -dynamic -e main -o $W/vt.out $W/xe.o -L$LIBDIR -lc \
+        2> $W/link.err; then :; else
+    echo "FAIL: the argument-less +v switches must still be accepted:"
+    cat $W/link.err
+    FAIL=1
+fi
+
+# --- a far call to an exported symbol reaches its stub ----------------------
+# The sizing pass and the relocation pass have to measure the same address.
+# An exported symbol the library also calls is reached through a stub placed
+# after the whole text, so a call NEAR the target can still be far from the
+# stub: measuring the target instead decides no long-branch stub is needed,
+# and the link then fails at relocation. Needs 20 MB of text to show up.
+CHECKS=`expr $CHECKS + 1`
+cat > $W/farlib.c <<'CEOF'
+int far_exported(void) { return 42; }
+int far_caller(void) { return far_exported(); }
+CEOF
+# The padding is its own object, listed after the code, so the order is
+# certain: [callee][caller][20 MB]. Inline asm in the C file is emitted
+# wherever the compiler likes -- which put the filler FIRST and left caller,
+# callee and stub adjacent, testing nothing.
+printf '\t.text\n\t.skip 0x1400000\n' > $W/farpad.s
+$XAS -mlp64 -o $W/farpad.o $W/farpad.s 2> $W/as.err
+cat > $W/farmain.c <<'CEOF'
+extern int far_caller(void);
+int main(void) { return far_caller() - 42; }
+CEOF
+if $CC -mlp64 -O2 -fPIC -c $W/farlib.c -o $W/farlib.o 2> $W/cc.err; then
+    if $HLD -b +h libfar.so -o $W/libfar.so $W/farlib.o $W/farpad.o \
+            2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        $CC -mlp64 -o $W/farprog $W/farmain.c -L$W -lfar 2> $W/link.err
+        SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/farprog
+        if [ $? -ne 0 ]; then
+            echo "FAIL: a far call to an exported symbol did not run"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: linking a library whose exported call needs a stub:"
+        cat $W/link.err
+        FAIL=1
+    fi
+fi
+
 # --- a library's own exported calls stay interposable -----------------------
 # A program may replace a symbol its library uses internally -- C++ requires
 # exactly that for operator new. Binding those calls at link time instead
@@ -769,16 +852,29 @@ int int_impl(void) { return 1; }
 typedef int (*int_fp)(void);
 int int_direct(void) { return int_impl(); }
 int_fp int_addr(void) { return int_impl; }
+/*
+ * Exported and only ever address-taken -- never called from inside the
+ * library. Marking a symbol interposable on calls alone leaves this one
+ * bound at link time, and the pointer the library hands out is its own
+ * rather than the one the rest of the process uses.
+ */
+int int_ptr_only(void) { return 1; }
+static int_fp int_table[1] = { int_ptr_only };
+int_fp int_from_table(void) { return int_table[0]; }
 CEOF
 cat > $W/intmain.c <<'CEOF'
 #include <stdio.h>
 typedef int (*int_fp)(void);
 extern int int_direct(void);
 extern int_fp int_addr(void);
+extern int_fp int_from_table(void);
 int int_impl(void) { return 2; }          /* the program replaces it */
+int int_ptr_only(void) { return 2; }      /* and this one too */
 int main(void) {
     int_fp p = int_addr();
-    printf("%d %d %d\n", int_direct(), p(), (void *)p == (void *)int_impl);
+    int_fp q = int_from_table();
+    printf("%d %d %d %d\n", int_direct(), p(),
+           (void *)p == (void *)int_impl, q());
     return 0;
 }
 CEOF
@@ -788,9 +884,10 @@ if $CC -mlp64 -O2 -fPIC -c $W/int.c -o $W/int.o 2> $W/cc.err; then
         CHECKS=`expr $CHECKS + 1`
         $CC -mlp64 -o $W/intprog $W/intmain.c -L$W -lint 2> $W/link.err
         got=`SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/intprog`
-        if [ "$got" != "2 2 1" ]; then
-            echo "FAIL: interposition: got '$got', expected '2 2 1'"
-            echo "      (direct call, via pointer, addresses equal)"
+        if [ "$got" != "2 2 1 2" ]; then
+            echo "FAIL: interposition: got '$got', expected '2 2 1 2'"
+            echo "      (direct call, via pointer, addresses equal,"
+            echo "       and a symbol only ever address-taken)"
             FAIL=1
         fi
     else
@@ -802,8 +899,8 @@ if $CC -mlp64 -O2 -fPIC -c $W/int.c -o $W/int.o 2> $W/cc.err; then
             2> $W/link.err; then
         $CC -mlp64 -o $W/intprog2 $W/intmain.c -L$W -lint 2> $W/link.err
         got=`SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/intprog2`
-        if [ "$got" != "1 1 0" ]; then
-            echo "FAIL: -B symbolic: got '$got', expected '1 1 0'"
+        if [ "$got" != "1 1 0 1" ]; then
+            echo "FAIL: -B symbolic: got '$got', expected '1 1 0 1'"
             FAIL=1
         fi
     else
