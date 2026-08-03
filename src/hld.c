@@ -182,6 +182,10 @@ int main(int argc, char **argv)
          * already the behaviour and the flag is a no-op rather than an
          * unimplemented feature. Build systems emit it by default; refusing
          * it stops a link that would have been correct.
+         *
+         * Note that gcc's ia64-hp-hpux11.23 driver has no -rdynamic of its
+         * own, so it fails there before a linker is reached: through gcc only
+         * the -Wl,-E and -Wl,--export-dynamic spellings arrive here.
          */
         if (strcmp(a, "-rdynamic") == 0 || strcmp(a, "-E") == 0
             || strcmp(a, "--export-dynamic") == 0) continue;
