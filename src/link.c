@@ -360,6 +360,21 @@ static int resolve_symbols_of(hld_link *L, hld_elf *e)
                 if (s->shndx == SHN_UNDEF) {
                     if (g->kind == HLD_SYM_UNDEF && bind == STB_WEAK)
                         g->bind = STB_WEAK;
+                    /*
+                     * A reference describes what it expects: `printf' comes
+                     * through as FUNC GLOBAL from a translation unit that
+                     * only declares it. For a symbol that stays undefined
+                     * and is left for the loader to bind, that declaration
+                     * is the only description there is -- and calling an
+                     * imported variable a function is how a data reference
+                     * ends up going through a descriptor. Fill in only what
+                     * is still blank, so the weak binding set just above and
+                     * any definition seen later both win.
+                     */
+                    if (g->kind == HLD_SYM_UNDEF) {
+                        if (!g->bind) g->bind = bind;
+                        if (!g->type) g->type = type;
+                    }
                     continue;
                 }
                 if (s->shndx == SHN_COMMON
@@ -880,7 +895,12 @@ int hld_layout(hld_link *L)
     }
     L->entry = g->value;
 
-    /* Undefined symbols are fatal in a static link. */
+    /*
+     * An undefined symbol is fatal in a program: nothing is loaded after it
+     * that could supply the definition. A shared library is the other case --
+     * hld_import_undefined() has already turned what is left into imports for
+     * the loader to bind, so anything still undefined here is weak.
+     */
     for (h = 0; h < HLD_SYMHASH; h++)
         for (g = L->hash[h]; g; g = g->next)
             if (g->kind == HLD_SYM_UNDEF && g->bind != STB_WEAK) {
