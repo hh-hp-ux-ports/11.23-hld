@@ -172,13 +172,71 @@ int hld_write_exec(hld_link *L)
     for (o = L->osecs; o; o = o->next) nsec++;
 
     /* --- symbol table ---------------------------------------------------- */
-    /* index 0 is the null entry; locals first (we emit only the null local) */
+    /* index 0 is the null entry, and ELF wants every local before any global */
     symcap = 64;
     symbuf = calloc(symcap, SYM64_SIZE);
     if (!symbuf) goto oom;
     memset(symbuf, 0, SYM64_SIZE);
     nsym = 1;
-    nlocal = 1;
+
+    /*
+     * Locals, from each object's own symbol table -- they are never interned
+     * into L->hash, which holds only what the link resolves globally. Without
+     * them a `static' function has no name in the output at all: `nm', a
+     * profiler and a crash dump can say nothing about it, where the platform's
+     * linker names it. Debug info is a separate matter and was never affected.
+     *
+     * Only named symbols defined in a section that made it into the output.
+     * SECTION and FILE entries are bookkeeping about the inputs and are left
+     * out; HP's linker emits them, and nothing here needs them.
+     */
+    {
+        size_t oi;
+        for (oi = 0; oi < L->nobjs; oi++) {
+            hld_elf *e = L->objs[oi];
+            uint32_t j;
+
+            for (j = 1; j < e->eh.shnum; j++) {
+                hld_sym *syms;
+                size_t n, k;
+                char serr[HLD_ERRSZ];
+
+                if (e->shdrs[j].type != SHT_SYMTAB) continue;
+                syms = hld_read_syms(e, &e->shdrs[j], &n, serr);
+                if (!syms) continue;      /* unreadable: not worth failing over */
+
+                for (k = 1; k < n; k++) {
+                    hld_sym *s = &syms[k];
+                    uint8_t type = ELF64_ST_TYPE(s->info);
+                    isec *in;
+
+                    if (ELF64_ST_BIND(s->info) != STB_LOCAL) continue;
+                    if (!s->name || !s->name[0]) continue;
+                    if (type == STT_SECTION || type == STT_FILE) continue;
+                    if (s->shndx == SHN_UNDEF || s->shndx >= e->eh.shnum)
+                        continue;
+                    in = hld_isec_of(L, e, s->shndx);
+                    if (!in || !in->out) continue;   /* section not emitted */
+
+                    if (nsym == symcap) {
+                        uint8_t *nb = realloc(symbuf, symcap * 2 * SYM64_SIZE);
+                        if (!nb) { free(syms); goto oom; }
+                        memset(nb + symcap * SYM64_SIZE, 0,
+                               symcap * SYM64_SIZE);
+                        symbuf = nb;
+                        symcap *= 2;
+                    }
+                    put_sym(symbuf + nsym * SYM64_SIZE,
+                            strtab_add(&str, s->name), s->info, s->other,
+                            (uint16_t)in->out->shndx,
+                            in->out->addr + in->out_off + s->value, s->size);
+                    nsym++;
+                }
+                free(syms);
+            }
+        }
+    }
+    nlocal = (uint32_t)nsym;
 
     for (h = 0; h < HLD_SYMHASH; h++) {
         for (g = L->hash[h]; g; g = g->next) {
