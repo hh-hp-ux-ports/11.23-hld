@@ -65,7 +65,21 @@ static const char *const hld_shared_forms[] = {
  */
 int hld_import_is_func(const hld_gsym *g)
 {
-    return g->type == STT_FUNC || g->type == STT_NOTYPE;
+    if (g->type == STT_FUNC) return 1;
+    if (g->type != STT_NOTYPE) return 0;
+    /*
+     * NOTYPE: the symbol does not say what it is. A defining library is
+     * the authority when there is one, and hld_bind_imports() has already
+     * taken its word; one that still says NOTYPE is treated as a function,
+     * which is long-standing behaviour here.
+     *
+     * With no defining library there is only the reference, and a compiler
+     * marks a function it calls: gcc emits `FUNC GLOBAL UND printf' and
+     * leaves an undefined variable NOTYPE. So NOTYPE here means data or
+     * unknown and must not be given a descriptor -- HP's linker builds one
+     * .plt entry for such a library, for the function alone.
+     */
+    return g->dso != NULL;
 }
 
 /* Standard ELF symbol hash (the gABI function). */
@@ -521,7 +535,9 @@ int hld_fill_dynamic(hld_link *L)
                      * ends up going through a descriptor.
                      */
                     e[4] = ELF64_ST_INFO(g->bind ? g->bind : STB_WEAK,
-                                         g->type ? g->type : STT_FUNC);
+                                         g->type ? g->type
+                                                 : (g->dso ? STT_FUNC
+                                                           : STT_NOTYPE));
                     st16(e + 6, SHN_UNDEF);
                     st64(e + 8, g->hint);
                     st64(e + 16, 0);
@@ -1144,9 +1160,43 @@ int hld_bind_imports(hld_link *L)
              * a variable, and the code then reads its data through a
              * descriptor slot.
              */
-            if (g->type == STT_NOTYPE) g->type = s->type;
+            if (s->type) g->type = s->type;
             if (s->bind) g->bind = s->bind;
             d->needed = 1;
+        }
+    return 0;
+}
+
+/*
+ * Leaving a symbol undefined is what a shared library is FOR: it is compiled
+ * against declarations and bound to a definition when something loads it. A
+ * program is the opposite -- nothing comes after it, so an undefined symbol
+ * there is a missing definition and stays fatal.
+ *
+ * Such a symbol becomes an ordinary import with no defining library: it gets
+ * a linkage-table slot and a dynamic relocation exactly as a bound import
+ * does, and the loader supplies the address from whatever module provides it.
+ * `dso' stays NULL, so it contributes no DT_NEEDED -- there is no library to
+ * name -- and `hint' stays 0, which is what an undefined symbol's st_value
+ * reads as anywhere else in ELF.
+ */
+int hld_import_undefined(hld_link *L)
+{
+    unsigned h;
+    hld_gsym *g;
+
+    if (!L->shared) return 0;
+
+    for (h = 0; h < HLD_SYMHASH; h++)
+        for (g = L->hash[h]; g; g = g->next) {
+            if (g->kind != HLD_SYM_UNDEF) continue;
+            /*
+             * These name this module's own layout and are about to be
+             * defined by it; importing one would bind us to another
+             * module's addresses. Same reasoning as hld_bind_imports().
+             */
+            if (hld_is_linker_symbol(g->name)) continue;
+            g->kind = HLD_SYM_IMPORT;
         }
     return 0;
 }

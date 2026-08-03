@@ -353,6 +353,7 @@ int  hld_import_is_func(const hld_gsym *g);
 uint64_t hld_target_addr(hld_gsym *g, isec *in, uint64_t off);
 lnkent *hld_opd_find(hld_link *L, hld_gsym *g, isec *in, uint64_t off);
 int  hld_bind_imports(hld_link *L);
+int  hld_import_undefined(hld_link *L);
 int  hld_alloc_dynamic(hld_link *L);
 int  hld_add_ident(hld_link *L);
 int  hld_alloc_stubs(hld_link *L);

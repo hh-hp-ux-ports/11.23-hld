@@ -293,6 +293,13 @@ int main(int argc, char **argv)
     phase("predefine");
     if (hld_bind_imports(&L) < 0) goto fail;
     phase("bind-imports");
+    /*
+     * After every library has had its say: what is still undefined can only
+     * be bound by whoever loads us, which a shared library is entitled to
+     * expect and a program is not.
+     */
+    if (hld_import_undefined(&L) < 0) goto fail;
+    phase("import-undefined");
     if (hld_alloc_unwind(&L) < 0) goto fail;
     phase("alloc-unwind");
     if (hld_alloc_linkage(&L) < 0) goto fail;
