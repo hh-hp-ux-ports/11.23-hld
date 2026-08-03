@@ -56,6 +56,7 @@ static void usage(void)
         "  +h NAME      the name it records for itself (DT_SONAME); -soname too\n"
         "  +b DIRS      where the loader should search at run time (DT_RUNPATH);\n"
         "               the -L list is recorded too unless +nodefaultrpath\n"
+        "  -rdynamic    accepted; an executable already exports every global\n"
         "  --whole-archive ... --no-whole-archive   take EVERY member of the\n"
         "               archives in between, not only those referenced\n"
         "  --start-group ... --end-group   re-search these archives until\n"
@@ -174,6 +175,16 @@ int main(int argc, char **argv)
          * is needed. Positional, as in the GNU linker, so one archive can be
          * embedded wholesale while the rest of the link stays ordinary.
          */
+        /*
+         * -rdynamic and -Wl,-E ask for every defined global to appear in the
+         * dynamic symbol table. An executable here already exports all of
+         * them -- the C library binds `_end' and `main' there -- so this is
+         * already the behaviour and the flag is a no-op rather than an
+         * unimplemented feature. Build systems emit it by default; refusing
+         * it stops a link that would have been correct.
+         */
+        if (strcmp(a, "-rdynamic") == 0 || strcmp(a, "-E") == 0
+            || strcmp(a, "--export-dynamic") == 0) continue;
         if (strcmp(a, "--whole-archive") == 0) { L.whole_archive = 1; continue; }
         if (strcmp(a, "--no-whole-archive") == 0) { L.whole_archive = 0; continue; }
         if (strcmp(a, "--start-group") == 0 || strcmp(a, "-(") == 0) {
