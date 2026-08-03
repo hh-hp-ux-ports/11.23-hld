@@ -758,6 +758,83 @@ CEOF
     fi
 fi
 
+# --- +e decides what a library offers ---------------------------------------
+# Naming any symbol restricts the export list to those named, which is the
+# platform linker's rule. Calls to a symbol left out still resolve inside the
+# module -- only the offer to other modules is withdrawn, so the library has
+# to keep working, not merely link.
+cat > $W/exp.c <<'CEOF'
+int exp_internal(int x) { return x * 2; }        /* global, not exported */
+int exp_public(int x) { return exp_internal(x) + 40; }
+CEOF
+cat > $W/expmain.c <<'CEOF'
+extern int exp_public(int);
+int main(void) { return exp_public(1) - 42; }
+CEOF
+if $CC -mlp64 -O2 -fPIC -c $W/exp.c -o $W/exp.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h libexp.so +e exp_public -o $W/libexp.so $W/exp.o \
+            2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        if $RE -s $W/libexp.so 2>/dev/null | grep -w exp_public \
+           > /dev/null 2>&1; then :; else
+            echo "FAIL: +e did not export the symbol it named"
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        # the whole point: everything NOT named must be withheld
+        # only .dynsym is restricted -- .symtab still defines it. A sed
+        # range would run to EOF here and read the wrong table.
+        if $RE -s $W/libexp.so 2>/dev/null \
+           | awk '/Symbol table .\.dynsym/{d=1;next} /Symbol table/{d=0} d' \
+           | grep -w exp_internal > /dev/null 2>&1; then
+            echo "FAIL: +e named one symbol but exp_internal is still exported"
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        # and the library must still work: the internal call has to resolve
+        $CC -mlp64 -o $W/expprog $W/expmain.c -L$W -lexp 2> $W/link.err
+        SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/expprog
+        if [ $? -ne 0 ]; then
+            echo "FAIL: a library with a restricted export list stopped working"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: linking with +e:"; cat $W/link.err; FAIL=1
+    fi
+    # +hideallsymbols restricts without naming anything
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h libhide.so +hideallsymbols -o $W/libhide.so $W/exp.o \
+            2> $W/link.err; then
+        n=`$RE -s $W/libhide.so 2>/dev/null \
+           | awk '/Symbol table .\.dynsym/{d=1;next} /Symbol table/{d=0} d' \
+           | grep -c "exp_public\|exp_internal"`
+        if [ "$n" != "0" ]; then
+            echo "FAIL: +hideallsymbols still exported $n symbol(s)"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: linking with +hideallsymbols:"; cat $W/link.err; FAIL=1
+    fi
+    # without either option nothing changes
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h liball.so -o $W/liball.so $W/exp.o 2> $W/link.err; then
+        if $RE -s $W/liball.so 2>/dev/null | grep -w exp_internal \
+           > /dev/null 2>&1; then :; else
+            echo "FAIL: without +e, exp_internal should still be exported"
+            FAIL=1
+        fi
+    fi
+    # a name nothing defines is a typo worth hearing about
+    CHECKS=`expr $CHECKS + 1`
+    $HLD -b +h libw.so +e exp_public +e no_such_symbol -o $W/libw.so \
+         $W/exp.o 2> $W/link.err
+    if grep 'no_such_symbol' $W/link.err > /dev/null 2>&1; then :; else
+        echo "FAIL: +e naming an undefined symbol said nothing"
+        FAIL=1
+    fi
+fi
+
 # --- static functions and variables keep their names ------------------------
 # A `static' is never interned globally, so unless the output symbol table is
 # built from each object's own symbols it has no name at all: `nm', a profiler
