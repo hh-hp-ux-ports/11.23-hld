@@ -896,25 +896,10 @@ int hld_layout(hld_link *L)
     L->entry = g->value;
 
     /*
-     * An undefined symbol is fatal in a program: nothing is loaded after it
-     * that could supply the definition. A shared library is the other case --
-     * hld_import_undefined() has already turned what is left into imports for
-     * the loader to bind, so anything still undefined here is weak, unless
-     * +noallowunsats asked for them to be reported instead.
-     *
-     * Report every one before failing. A single C++ object that throws has
-     * five, and answering them one link at a time is five builds.
+     * Nothing is checked for being undefined here: hld_import_undefined()
+     * runs first and either reports every one and fails, or hands them to
+     * the loader as imports.
      */
-    {
-        int unsat = 0;
-        for (h = 0; h < HLD_SYMHASH; h++)
-            for (g = L->hash[h]; g; g = g->next)
-                if (g->kind == HLD_SYM_UNDEF && g->bind != STB_WEAK) {
-                    lerr(L, "undefined symbol `%s'", g->name, NULL);
-                    unsat++;
-                }
-        if (unsat) return -1;
-    }
     return 0;
 }
 
@@ -1230,12 +1215,16 @@ int hld_alloc_linkage(hld_link *L)
                     free(syms); free(rel);
                     return -1;
                 }
-                if (want_call) {
-                    if (L->shared && !L->bsymbolic && g
-                        && g->kind == HLD_SYM_DEFINED)
-                        g->interposable = 1;
-                    continue;
-                }
+                /*
+                 * Called, or had its address taken: either way another
+                 * module may substitute its own definition, and both have to
+                 * reach the same one or a function ends up with two
+                 * addresses in one process.
+                 */
+                if ((want_call || want_opd) && L->shared && !L->bsymbolic
+                    && g && g->kind == HLD_SYM_DEFINED)
+                    g->interposable = 1;
+                if (want_call) continue;
                 if (want_dyn && hld_dynrel_type(L, g, r->type, &dtype)) {
                     int loc = !(g && g->kind == HLD_SYM_IMPORT);
                     if (dynrel_add(L, site, r->offset, g, off, dtype,
@@ -1833,6 +1822,7 @@ void hld_link_free(hld_link *L)
     free(L->coderanges);
     free(L->libpaths);
     free(L->rpaths);
+    free(L->exports);
     hld_free_stubs(L);
     {
         hld_archive *ar, *arn;

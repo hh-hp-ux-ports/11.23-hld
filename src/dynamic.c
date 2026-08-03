@@ -234,8 +234,14 @@ int hld_alloc_dynamic(hld_link *L)
                  * the rest" switch. +hideallsymbols restricts without naming.
                  * Calls to a symbol left out still resolve inside the module;
                  * only the offer to other modules is withdrawn.
+                 *
+                 * A library only. An executable's exports are not an
+                 * interface anyone chooses: the C library binds `_end' and
+                 * `main' there, so restricting them produces an image the
+                 * loader refuses -- and it links cleanly, which is worse.
                  */
-                if ((L->nexports || L->hide_all) && !g->export_named)
+                if (L->shared && (L->nexports || L->hide_all)
+                    && !g->export_named)
                     continue;
                 g->dynidx = nsym++;
                 /*

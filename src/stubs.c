@@ -348,7 +348,14 @@ static long scan(hld_link *L)
                  * the indirect jump. Its address is known here even though
                  * the symbol's value is not filled in until later.
                  */
-                if (g && g->kind == HLD_SYM_IMPORT)
+                /*
+                 * An exported symbol this library also uses goes through the
+                 * same stub, so it is that address the branch has to reach --
+                 * hld_relocate() redirects there, and measuring the function
+                 * instead decides a call is in range that then is not.
+                 */
+                if (g && (g->kind == HLD_SYM_IMPORT
+                          || (g->has_plt && g->kind == HLD_SYM_DEFINED)))
                     to = L->stubsec ? L->stubsec->addr + g->stub_off : 0;
                 else
                     to = g ? g->value + off

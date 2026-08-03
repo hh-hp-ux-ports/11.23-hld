@@ -161,8 +161,18 @@ int main(int argc, char **argv)
                 L.no_undefined = 0;
                 continue;
             }
-            /* diagnostic-only switches: harmless to accept and ignore */
-            if (strncmp(a, "+v", 2) == 0 || strcmp(a, "+w") == 0
+            /*
+             * Diagnostic-only switches: harmless to accept and ignore. Named
+             * one by one rather than matched on `+v', because +vtype takes an
+             * argument -- a prefix match leaves that argument to be read as
+             * an input file, which is a linked object nobody asked for.
+             */
+            if (strcmp(a, "+vshlibunsats") == 0
+                || strcmp(a, "+vnoshlibunsats") == 0
+                || strcmp(a, "+vallcompatwarnings") == 0
+                || strcmp(a, "+vcompatwarnings") == 0
+                || strcmp(a, "+vnocompatwarnings") == 0
+                || strcmp(a, "+w") == 0
                 || strcmp(a, "+noenvvar") == 0 || strcmp(a, "+compat") == 0) {
                 continue;
             }
