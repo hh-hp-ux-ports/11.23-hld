@@ -899,14 +899,22 @@ int hld_layout(hld_link *L)
      * An undefined symbol is fatal in a program: nothing is loaded after it
      * that could supply the definition. A shared library is the other case --
      * hld_import_undefined() has already turned what is left into imports for
-     * the loader to bind, so anything still undefined here is weak.
+     * the loader to bind, so anything still undefined here is weak, unless
+     * +noallowunsats asked for them to be reported instead.
+     *
+     * Report every one before failing. A single C++ object that throws has
+     * five, and answering them one link at a time is five builds.
      */
-    for (h = 0; h < HLD_SYMHASH; h++)
-        for (g = L->hash[h]; g; g = g->next)
-            if (g->kind == HLD_SYM_UNDEF && g->bind != STB_WEAK) {
-                lerr(L, "undefined symbol `%s'", g->name, NULL);
-                return -1;
-            }
+    {
+        int unsat = 0;
+        for (h = 0; h < HLD_SYMHASH; h++)
+            for (g = L->hash[h]; g; g = g->next)
+                if (g->kind == HLD_SYM_UNDEF && g->bind != STB_WEAK) {
+                    lerr(L, "undefined symbol `%s'", g->name, NULL);
+                    unsat++;
+                }
+        if (unsat) return -1;
+    }
     return 0;
 }
 

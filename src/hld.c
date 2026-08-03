@@ -57,6 +57,9 @@ static void usage(void)
         "  +b DIRS      where the loader should search at run time (DT_RUNPATH);\n"
         "               the -L list is recorded too unless +nodefaultrpath\n"
         "  -rdynamic    accepted; an executable already exports every global\n"
+        "  +noallowunsats  an unsatisfied symbol is an error even in a\n"
+        "               library, where it is otherwise left for the loader\n"
+        "               to bind; --no-undefined too\n"
         "  --whole-archive ... --no-whole-archive   take EVERY member of the\n"
         "               archives in between, not only those referenced\n"
         "  --start-group ... --end-group   re-search these archives until\n"
@@ -111,6 +114,27 @@ int main(int argc, char **argv)
             }
             if (strcmp(a, "+Accept") == 0 || strcmp(a, "+e") == 0) {
                 if (i + 1 < argc) ++i;
+                continue;
+            }
+            /*
+             * Whether an unsatisfied symbol is an error. Permitting them is
+             * the default for a library and matches the platform's linker --
+             * a library is compiled against declarations and bound when
+             * something loads it. +noallowunsats asks to hear about them now
+             * instead, which is what a C++ module wants: one that throws
+             * needs __cxa_allocate_exception and friends, and a system with
+             * no shared libstdc++ can only fail at dlopen otherwise.
+             *
+             * The GNU spelling --no-undefined is accepted too. `-z defs' is
+             * NOT: -z already means trap-null here, so honouring it would
+             * mean silently eating the following argument.
+             */
+            if (strcmp(a, "+noallowunsats") == 0) {
+                L.no_undefined = 1;
+                continue;
+            }
+            if (strcmp(a, "+allowunsats") == 0) {
+                L.no_undefined = 0;
                 continue;
             }
             /* diagnostic-only switches: harmless to accept and ignore */
@@ -189,6 +213,12 @@ int main(int argc, char **argv)
          */
         if (strcmp(a, "-rdynamic") == 0 || strcmp(a, "-E") == 0
             || strcmp(a, "--export-dynamic") == 0) continue;
+        /* the GNU spelling of +noallowunsats; see the note there */
+        if (strcmp(a, "--no-undefined") == 0) { L.no_undefined = 1; continue; }
+        if (strcmp(a, "--allow-shlib-undefined") == 0) {
+            L.no_undefined = 0;
+            continue;
+        }
         if (strcmp(a, "--whole-archive") == 0) { L.whole_archive = 1; continue; }
         if (strcmp(a, "--no-whole-archive") == 0) { L.whole_archive = 0; continue; }
         if (strcmp(a, "--start-group") == 0 || strcmp(a, "-(") == 0) {

@@ -1185,7 +1185,33 @@ int hld_import_undefined(hld_link *L)
     unsigned h;
     hld_gsym *g;
 
-    if (!L->shared) return 0;
+    /*
+     * A program, or +noallowunsats: nothing will bind these later, so report
+     * them. Every one, before failing -- a single C++ object that throws has
+     * five, and answering them one link at a time is five builds. This runs
+     * before the relocation scan, which would otherwise stop at the first.
+     */
+    if (!L->shared || L->no_undefined) {
+        int unsat = 0;
+        for (h = 0; h < HLD_SYMHASH; h++)
+            for (g = L->hash[h]; g; g = g->next)
+                if (g->kind == HLD_SYM_UNDEF && g->bind != STB_WEAK
+                    && !hld_is_linker_symbol(g->name)) {
+                    /*
+                     * Straight to stderr: there is one error buffer and the
+                     * driver prints it once, so listing them any other way
+                     * would report the last and swallow the rest.
+                     */
+                    fprintf(stderr, "hld: undefined symbol `%s'\n", g->name);
+                    unsat++;
+                }
+        if (unsat) {
+            snprintf(L->err, HLD_ERRSZ, "%d unsatisfied symbol%s",
+                     unsat, unsat == 1 ? "" : "s");
+            return -1;
+        }
+        return 0;
+    }
 
     for (h = 0; h < HLD_SYMHASH; h++)
         for (g = L->hash[h]; g; g = g->next) {

@@ -312,6 +312,7 @@ typedef struct {
     const char *out_path;
     const char *entry_name;
     int trapnil;              /* -z */
+    int no_undefined;         /* +noallowunsats */
     int map;                  /* -m */
     int verbose;
 
