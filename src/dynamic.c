@@ -238,6 +238,23 @@ int hld_alloc_dynamic(hld_link *L)
                 if ((L->nexports || L->hide_all) && !g->export_named)
                     continue;
                 g->dynidx = nsym++;
+                /*
+                 * Exported AND called from inside this library: the call
+                 * goes through a descriptor the loader may repoint, so that
+                 * a program defining the same symbol replaces ours -- which
+                 * C++ requires for operator new. The descriptor is seeded
+                 * with our own definition, so nothing interposing leaves the
+                 * library calling itself, as before.
+                 *
+                 * Only a function: a variable is reached through a data slot
+                 * that is already relocated, and has nothing to call.
+                 */
+                if (L->shared && g->interposable && g->type == STT_FUNC) {
+                    g->plt_slot = nimp * 16;
+                    g->stub_off = nimp * STUB_SIZE;
+                    g->has_plt = 1;
+                    nimp++;
+                }
             }
     L->ndynsym = nsym;
     L->nimports = nimp;
@@ -608,7 +625,20 @@ int hld_fill_dynamic(hld_link *L)
              * name. Naming it was a hard failure the moment visibility
              * started being honoured.
              */
-            if (!l->g || l->g->kind != HLD_SYM_IMPORT) {
+            /*
+             * An exported function this library also calls is bound by name,
+             * so that the address it hands out is the same one everything
+             * else in the process calls -- otherwise a program replacing the
+             * symbol gets its own code called while a pointer taken here
+             * still points at ours, and the two compare unequal.
+             *
+             * has_plt is only ever set on a symbol that is actually
+             * exported, so this cannot name a hidden one: that has no export
+             * to name, and anchoring is the only way to relocate it.
+             */
+            if (!l->g
+                || (l->g->kind != HLD_SYM_IMPORT
+                    && !(l->g->has_plt && l->kind == HLD_DLT_FPTR))) {
                 uint64_t a;
                 if (l->kind == HLD_DLT_FPTR) {
                     /*
@@ -700,7 +730,7 @@ int hld_fill_dynamic(hld_link *L)
                 uint64_t plt_addr;
                 uint8_t *sp;
 
-                if (g->kind != HLD_SYM_IMPORT || !g->has_plt) continue;
+                if (!g->has_plt) continue;
                 nfilled++;
                 plt_addr = L->pltsec->addr + g->plt_slot;
 
@@ -711,7 +741,13 @@ int hld_fill_dynamic(hld_link *L)
                  * it reject the image.
                  */
                 if (L->pltsec->data) {
-                    st64(L->pltsec->data + g->plt_slot, g->hint);
+                    /*
+                     * An import has only the defining library's address as a
+                     * hint; one of our own has the real thing, which is what
+                     * the platform's linker records here too.
+                     */
+                    st64(L->pltsec->data + g->plt_slot,
+                         g->kind == HLD_SYM_IMPORT ? g->hint : g->value);
                     st64(L->pltsec->data + g->plt_slot + 8, L->gp);
                 }
                 reladyn_add(L, plt_addr, g->dynidx, R_IA64_IPLTMSB, 0);
@@ -728,7 +764,14 @@ int hld_fill_dynamic(hld_link *L)
                         return -1;
                     }
                 }
-                g->value = L->stubsec->addr + g->stub_off;  /* calls go here */
+                /*
+                 * An import has no address of its own, so its value IS the
+                 * stub. One of ours keeps its real address -- .dynsym, a
+                 * function pointer and a data relocation all still want it --
+                 * and only branches are sent to the stub, at relocation time.
+                 */
+                if (g->kind == HLD_SYM_IMPORT)
+                    g->value = L->stubsec->addr + g->stub_off;
             }
         /*
          * A descriptor left unwritten is a call that jumps to zero, and a

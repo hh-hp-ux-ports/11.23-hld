@@ -60,6 +60,8 @@ static void usage(void)
         "  +e SYM       export SYM; naming any symbol exports ONLY those named\n"
         "               (+ee is the same here), and +hideallsymbols restricts\n"
         "               without naming one\n"
+        "  -B symbolic  bind the library's calls to its own exported symbols\n"
+        "               now, denying interposition (-Bsymbolic too)\n"
         "  +noallowunsats  an unsatisfied symbol is an error even in a\n"
         "               library, where it is otherwise left for the loader\n"
         "               to bind; --no-undefined too\n"
@@ -233,6 +235,23 @@ int main(int argc, char **argv)
          * own, so it fails there before a linker is reached: through gcc only
          * the -Wl,-E and -Wl,--export-dynamic spellings arrive here.
          */
+        /*
+         * -B symbolic asks that the library's calls to its own exported
+         * symbols be bound now rather than left for the loader. That is a
+         * real choice -- it denies interposition, which is occasionally what
+         * a plugin wants -- so it is spelled explicitly rather than assumed.
+         */
+        if (strcmp(a, "-B") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "hld: option `-B' needs an argument\n");
+                return 1;
+            }
+            ++i;
+            if (strcmp(argv[i], "symbolic") == 0) { L.bsymbolic = 1; continue; }
+            fprintf(stderr, "hld: -B %s is not implemented\n", argv[i]);
+            return 1;
+        }
+        if (strcmp(a, "-Bsymbolic") == 0) { L.bsymbolic = 1; continue; }
         if (strcmp(a, "-rdynamic") == 0 || strcmp(a, "-E") == 0
             || strcmp(a, "--export-dynamic") == 0) continue;
         /* the GNU spelling of +noallowunsats; see the note there */

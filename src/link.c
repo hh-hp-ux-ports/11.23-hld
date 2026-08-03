@@ -1152,7 +1152,7 @@ int hld_alloc_linkage(hld_link *L)
                 isec *in;
                 uint64_t off;
                 const char *nm;
-                int want_dlt = 0, want_opd = 0, want_pltoff = 0, want_dyn = 0;
+                int want_dlt = 0, want_opd = 0, want_pltoff = 0, want_dyn = 0, want_call = 0;
                 int dlt_kind = HLD_DLT_PLAIN;
                 uint32_t dtype;
 
@@ -1212,12 +1212,29 @@ int hld_alloc_linkage(hld_link *L)
                 case R_IA64_PLTOFF64LSB:
                     want_pltoff = 1;
                     break;
+                /*
+                 * A call. In a library, one to a symbol the library exports
+                 * has to go through the linkage table so that whatever loads
+                 * it can substitute its own definition -- the platform's
+                 * linker leaves exactly these calls to the loader, and
+                 * binding them here instead silently denies interposition.
+                 */
+                case R_IA64_PCREL21B:
+                case R_IA64_PCREL60B:
+                    want_call = 1;
+                    break;
                 default:
                     continue;
                 }
                 if (hld_reloc_target(L, e, syms, nsyms, r, &g, &in, &off, &nm) < 0) {
                     free(syms); free(rel);
                     return -1;
+                }
+                if (want_call) {
+                    if (L->shared && !L->bsymbolic && g
+                        && g->kind == HLD_SYM_DEFINED)
+                        g->interposable = 1;
+                    continue;
                 }
                 if (want_dyn && hld_dynrel_type(L, g, r->type, &dtype)) {
                     int loc = !(g && g->kind == HLD_SYM_IMPORT);
@@ -1643,6 +1660,15 @@ int hld_relocate(hld_link *L)
 
                 case R_IA64_PCREL21B:
                     /*
+                     * A call to something this library exports goes to the
+                     * descriptor stub instead of straight to the code, so the
+                     * loader can point it at another module's definition. The
+                     * descriptor already holds our own, so an uninterposed
+                     * call ends up exactly where it would have.
+                     */
+                    if (tg && tg->has_plt && tg->kind == HLD_SYM_DEFINED)
+                        S = L->stubsec->addr + tg->stub_off;
+                    /*
                      * A direct call reaches +-16 MB. Past that the call is
                      * sent to a stub placed near it, which makes the jump
                      * with a wide branch; the stub leaves b0 alone, so the
@@ -1674,11 +1700,17 @@ int hld_relocate(hld_link *L)
                     V = S - P;
                     break;
 
+                case R_IA64_PCREL60B:
+                    /* the wide-branch form of the same call */
+                    if (tg && tg->has_plt && tg->kind == HLD_SYM_DEFINED)
+                        S = L->stubsec->addr + tg->stub_off;
+                    V = S - P;
+                    break;
+
                 case R_IA64_PCREL21BI:
                 case R_IA64_PCREL21F:
                 case R_IA64_PCREL21M:
                 case R_IA64_PCREL22:
-                case R_IA64_PCREL60B:
                 case R_IA64_PCREL64I:
                 case R_IA64_PCREL32MSB:
                 case R_IA64_PCREL32LSB:

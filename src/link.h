@@ -76,6 +76,7 @@ typedef struct hld_gsym {
     uint8_t type, bind, other;
     uint8_t has_plt;          /* an import we call: has a descriptor + stub */
     uint8_t export_named;     /* named by +e/+ee: export even under a list */
+    uint8_t interposable;     /* exported from a library and called: via a stub */
     int short_common;         /* COMMON belongs in the short bss (.sbss) */
     isec *in;                 /* defining input section (DEFINED) */
     uint64_t in_off;          /* offset within that input section */
@@ -286,6 +287,7 @@ typedef struct {
     char **exports;
     size_t nexports, exports_cap;
     int hide_all;             /* +hideallsymbols */
+    int bsymbolic;            /* -B symbolic: bind own calls at link time */
     /*
      * A shared library relocates addresses of its own data against a segment
      * anchor: a LOCAL SECTION symbol in .dynsym, with the offset carried in
