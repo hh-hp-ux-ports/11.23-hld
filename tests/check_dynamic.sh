@@ -820,6 +820,36 @@ if $CC -mlp64 -O2 -fPIC -c $W/undef.c -o $W/undef.o 2> $W/cc.err; then
         cat $W/link.err
         FAIL=1
     fi
+    # +noallowunsats asks for the opposite bargain: report now rather than
+    # let the loader discover it. That is what a C++ module wants -- one that
+    # throws needs __cxa_allocate_exception, and where no shared libstdc++
+    # exists it would otherwise link cleanly and fail at dlopen.
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h libundef.so +noallowunsats -o $W/libno.so $W/undef.o \
+            2> $W/link.err; then
+        echo "FAIL: +noallowunsats accepted a library with unsatisfied symbols"
+        FAIL=1
+    else
+        # every unsatisfied symbol, not merely the first: answering them one
+        # link at a time is one build per symbol. Naming them also keeps a
+        # linker that simply rejects the option from passing this.
+        CHECKS=`expr $CHECKS + 1`
+        for s in printf shared_counter; do
+            if grep "$s" $W/link.err > /dev/null 2>&1; then :; else
+                echo "FAIL: +noallowunsats did not report '$s':"
+                cat $W/link.err
+                FAIL=1
+            fi
+        done
+    fi
+    # the GNU spelling does the same
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h libundef.so --no-undefined -o $W/libno.so $W/undef.o \
+            2> $W/link.err; then
+        echo "FAIL: --no-undefined accepted unsatisfied symbols"
+        FAIL=1
+    fi
+
     # ...but a program may not: nothing is loaded after it to supply one.
     CHECKS=`expr $CHECKS + 1`
     cat > $W/nodef.c <<'CEOF'
