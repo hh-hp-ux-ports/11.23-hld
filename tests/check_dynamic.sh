@@ -758,6 +758,52 @@ CEOF
     fi
 fi
 
+# --- a static initialiser may hold an IMPORTED function's address -----------
+# On this target a function address is a descriptor, and an import's belongs
+# to the module that defines it -- so the loader writes it and the linker must
+# not demand a local one. gnulib's allocator.c is exactly this
+# (`{ malloc, realloc, free }`), so refusing it refused a large share of GNU
+# packages. Calling through the pointers is the test: linking proves nothing
+# if the descriptor the loader wrote is not the real one.
+cat > $W/imp.c <<'CEOF'
+#include <stdlib.h>
+#include <string.h>
+struct alloc { void *(*a)(size_t); void *(*r)(void *, size_t); void (*f)(void *); };
+struct alloc const imp_allocator = { malloc, realloc, free };
+int main(void) {
+    char *p = imp_allocator.a(64);
+    if (!p) return 1;
+    strcpy(p, "ok");
+    p = imp_allocator.r(p, 128);
+    if (!p) return 2;
+    imp_allocator.f(p);
+    /* the canonical descriptor: what the loader wrote must be what we see */
+    if ((void *)imp_allocator.a != (void *)malloc) return 3;
+    if ((void *)imp_allocator.r != (void *)realloc) return 4;
+    if ((void *)imp_allocator.f != (void *)free) return 5;
+    return 0;
+}
+CEOF
+if $CC -mlp64 -O2 -c $W/imp.c -o $W/imp.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -dynamic -e _start -o $W/impprog $W/crt_min.o $W/imp.o \
+            -L$LIBDIR -lc 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        $W/impprog
+        rc=$?
+        if [ $rc -ne 0 ]; then
+            echo "FAIL: imported function pointers in static data: exit $rc"
+            echo "      (1/2 allocation failed, 3/4/5 pointer is not the"
+            echo "       canonical descriptor for malloc/realloc/free)"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: a static initialiser holding imported addresses:"
+        cat $W/link.err
+        FAIL=1
+    fi
+fi
+
 # --- an export list is a library's alone ------------------------------------
 # An executable's exported symbols are not an interface anyone chooses: the C
 # library binds `_end' there. Restricting them produces an image the loader

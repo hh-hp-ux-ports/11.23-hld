@@ -1587,6 +1587,26 @@ int hld_relocate(hld_link *L)
                 case R_IA64_FPTR32LSB:
                 case R_IA64_FPTR64MSB:
                 case R_IA64_FPTR64LSB:
+                    /*
+                     * An import's descriptor belongs to the module that
+                     * defines it, so hld_alloc_linkage() records a dynamic
+                     * relocation for this site and deliberately builds no
+                     * local one. Demanding one here contradicted that and
+                     * refused the link -- which is what
+                     *
+                     *     struct allocator const a = { malloc, realloc, free };
+                     *
+                     * is: a static initialiser holding the addresses of
+                     * imported functions. It is core gnulib, so this refused
+                     * a large share of GNU packages. Seed the word with the
+                     * binding hint, as every other imported address here is,
+                     * and let the loader write the real descriptor.
+                     */
+                    if (tg && tg->kind == HLD_SYM_IMPORT
+                        && hld_dynrel_type(L, tg, r->type, &dyntype)) {
+                        V = S;
+                        break;
+                    }
                     ent = hld_opd_find(L, tg, tin, toff);
                     if (!ent) {
                         snprintf(L->err, HLD_ERRSZ,
