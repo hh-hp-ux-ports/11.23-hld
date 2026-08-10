@@ -1226,15 +1226,32 @@ int hld_alloc_linkage(hld_link *L)
                     g->interposable = 1;
                 if (want_call) continue;
                 if (want_dyn && hld_dynrel_type(L, g, r->type, &dtype)) {
-                    int loc = !(g && g->kind == HLD_SYM_IMPORT);
-                    if (dynrel_add(L, site, r->offset, g, off, dtype,
-                                   in, off, loc) < 0) goto oom;
+                    int imported = g && g->kind == HLD_SYM_IMPORT;
                     /*
-                     * An imported descriptor belongs to the other module.
-                     * A local one is ours, and the loader only adjusts the
-                     * word -- so keep building it.
+                     * Bound BY NAME whenever another module may supply the
+                     * answer: an import always, and an exported symbol this
+                     * library also uses, so that everything in the process
+                     * ends up with the one canonical descriptor. Anchoring
+                     * that second case instead points the word at our own
+                     * .opd entry, which no interposing definition can
+                     * displace -- the library then hands out a pointer the
+                     * rest of the process does not share.
+                     *
+                     * HP's compiler makes this reachable where gcc does not:
+                     * a function address in static data comes through as
+                     * FPTR64MSB from aCC and as LTOFF_FPTR from gcc, and only
+                     * the first lands here.
                      */
-                    if (!loc) continue;
+                    int named = imported || (g && g->interposable);
+                    if (dynrel_add(L, site, r->offset, g, off, dtype,
+                                   in, off, !named) < 0) goto oom;
+                    /*
+                     * An imported descriptor belongs to the other module, so
+                     * there is nothing further to build. One of ours still
+                     * needs its .opd entry made below: that is what the
+                     * loader resolves the name to when nothing interposes.
+                     */
+                    if (imported) continue;
                 }
                 if (want_opd) dlt_kind = HLD_DLT_FPTR;
                 if ((dlt_kind == HLD_DLT_TPREL || dlt_kind == HLD_DLT_DTPMOD

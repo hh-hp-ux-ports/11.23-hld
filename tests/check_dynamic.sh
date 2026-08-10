@@ -887,6 +887,55 @@ if $CC -mlp64 -O2 -fPIC -c $W/farlib.c -o $W/farlib.o 2> $W/cc.err; then
     fi
 fi
 
+# --- a function address in static data, from the VENDOR compiler ------------
+# Which relocation carries a function address in static data depends on the
+# compiler, and only one of the two reaches this path: aCC emits FPTR64MSB,
+# gcc emits LTOFF_FPTR and goes through the linkage table instead. So this
+# case cannot be tested with gcc at all -- a gcc-only check reports the path
+# as working while it is broken, which is how it was nearly dismissed.
+if [ -x /opt/aCC/bin/aCC ]; then
+    cat > $W/accfp.c <<'CEOF'
+typedef int (*fp)(void);
+int accfp_impl(void) { return 1; }
+static fp accfp_table[1] = { accfp_impl };
+fp accfp_from_table(void) { return accfp_table[0]; }
+CEOF
+    cat > $W/accfpmain.c <<'CEOF'
+typedef int (*fp)(void);
+extern fp accfp_from_table(void);
+int accfp_impl(void) { return 2; }        /* the program replaces it */
+int main(void) {
+    fp q = accfp_from_table();
+    /* interposed, and the same address the rest of the process uses */
+    return (q() == 2 && (void *)q == (void *)accfp_impl) ? 0 : 1;
+}
+CEOF
+    ( cd $W && /opt/aCC/bin/aCC -Ae +DD64 +z -c accfp.c -o accfp.o ) > $W/acc.log 2>&1
+    if [ -f $W/accfp.o ]; then
+        CHECKS=`expr $CHECKS + 1`
+        # the fixture is only meaningful if aCC really emitted FPTR64
+        if $RE -r $W/accfp.o 2>/dev/null | grep FPTR64 > /dev/null 2>&1; then :; else
+            echo "FAIL: the aCC fixture has no FPTR64 relocation; it tests nothing"
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        if $HLD -b +h libaccfp.so -o $W/libaccfp.so $W/accfp.o 2> $W/link.err; then
+            CHECKS=`expr $CHECKS + 1`
+            $CC -mlp64 -o $W/accfpprog $W/accfpmain.c -L$W -laccfp 2> $W/link.err
+            SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/accfpprog
+            if [ $? -ne 0 ]; then
+                echo "FAIL: a vendor-compiled function-pointer table did not"
+                echo "      interpose, or handed out a non-canonical descriptor"
+                FAIL=1
+            fi
+        else
+            echo "FAIL: linking the vendor function-pointer fixture:"
+            cat $W/link.err
+            FAIL=1
+        fi
+    fi
+fi
+
 # --- a FAR call to an exported symbol must interpose too --------------------
 # The intersection of two features that were tested only separately: a call
 # beyond a branch's reach goes through a long-branch stub, and a call to an
