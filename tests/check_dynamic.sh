@@ -887,6 +887,45 @@ if $CC -mlp64 -O2 -fPIC -c $W/farlib.c -o $W/farlib.o 2> $W/cc.err; then
     fi
 fi
 
+# --- a FAR call to an exported symbol must interpose too --------------------
+# The intersection of two features that were tested only separately: a call
+# beyond a branch's reach goes through a long-branch stub, and a call to an
+# exported symbol goes through the descriptor stub. Three passes pick that
+# target -- sizing, relocation, and stub WRITING -- and if the writing pass
+# disagrees the far call lands on the local definition while a near call to
+# the same symbol interposes. One function, two identities, and only in
+# libraries past 16 MB, so nothing smaller reveals it.
+cat > $W/fari.c <<'CEOF'
+int fari_callee(void);
+int fari_caller(void) { return fari_callee(); }
+int fari_callee(void) { return 1; }
+CEOF
+cat > $W/farimain.c <<'CEOF'
+extern int fari_caller(void);
+int fari_callee(void) { return 2; }      /* the program replaces it */
+int main(void) { return fari_caller() == 2 ? 0 : 1; }
+CEOF
+printf '\t.text\n\t.skip 0x1400000\n' > $W/faripad.s
+if $XAS -mlp64 -o $W/faripad.o $W/faripad.s 2> $W/as.err \
+   && $CC -mlp64 -O2 -fPIC -c $W/fari.c -o $W/fari.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h libfari.so -o $W/libfari.so $W/fari.o $W/faripad.o \
+            2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        $CC -mlp64 -o $W/fariprog $W/farimain.c -L$W -lfari 2> $W/link.err
+        SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/fariprog
+        if [ $? -ne 0 ]; then
+            echo "FAIL: a far call to an exported symbol did not interpose"
+            echo "      (the long-branch stub went to the local definition)"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: linking the far-interposition fixture:"
+        cat $W/link.err
+        FAIL=1
+    fi
+fi
+
 # --- a library's own exported calls stay interposable -----------------------
 # A program may replace a symbol its library uses internally -- C++ requires
 # exactly that for operator new. Binding those calls at link time instead

@@ -421,10 +421,27 @@ int hld_write_stubs(hld_link *L)
         if (!is->at->out->data) continue;
         for (s = is->stubs; s; s = s->next) {
             uint64_t at = hld_stub_addr(L, s);
-            uint64_t to = s->g ? s->g->value + s->off
-                               : (s->in ? s->in->out->addr + s->in->out_off
-                                          + s->off
-                                        : s->off);
+            /*
+             * Same target the relocation pass picks, and for the same reason:
+             * a call to an exported symbol this library also calls goes
+             * through the descriptor stub so the loader can repoint it. An
+             * import's `value' IS its stub already; one of ours keeps its
+             * real address, so it has to be asked for here explicitly.
+             *
+             * Measuring one address in scan(), branching to a second in
+             * hld_relocate(), and writing a third here is how a far call ends
+             * up at the local definition while a near call to the same symbol
+             * interposes -- one function with two identities in one process,
+             * and only past a branch's reach, so small libraries never show it.
+             */
+            uint64_t to;
+            if (s->g && s->g->has_plt && s->g->kind == HLD_SYM_DEFINED)
+                to = L->stubsec->addr + s->g->stub_off + s->off;
+            else
+                to = s->g ? s->g->value + s->off
+                          : (s->in ? s->in->out->addr + s->in->out_off
+                                     + s->off
+                                   : s->off);
             uint8_t *p = is->at->out->data + is->at->out_off + s->slot;
 
             memcpy(p, hld_brl_stub, HLD_STUB_BUNDLE);
