@@ -642,8 +642,21 @@ int hld_fill_dynamic(hld_link *L)
              * exported, so this cannot name a hidden one: that has no export
              * to name, and anchoring is the only way to relocate it.
              */
+            /*
+             * A thread-local slot can never be anchored. The loader is not
+             * being asked for an address at all: it has to supply the module
+             * that owns the variable and the offset within THAT module's
+             * block, and neither is expressible as segment-base + offset.
+             * Anchoring them writes two plausible numbers that the thread
+             * pointer is then indexed by -- a shared library with any
+             * `__thread' data crashed on first access.
+             */
+            int tls_slot = (l->kind == HLD_DLT_TPREL
+                            || l->kind == HLD_DLT_DTPMOD
+                            || l->kind == HLD_DLT_DTPREL);
             if (!l->g
-                || (l->g->kind != HLD_SYM_IMPORT
+                || (!tls_slot
+                    && l->g->kind != HLD_SYM_IMPORT
                     && !(l->g->has_plt && l->kind == HLD_DLT_FPTR))) {
                 uint64_t a;
                 if (l->kind == HLD_DLT_FPTR) {
@@ -669,10 +682,25 @@ int hld_fill_dynamic(hld_link *L)
                                  R_IA64_DIR64MSB);
                 continue;
             }
-            reladyn_needs_sym(L, l->g->dynidx, l->g->name);
-            reladyn_add(L, L->dltsec->addr + l->slot, l->g->dynidx,
-                        l->kind == HLD_DLT_FPTR ? R_IA64_FPTR64MSB
-                                                : R_IA64_DIR64MSB, 0);
+            /*
+             * The slot's KIND decides what the loader is being asked for. A
+             * thread-local owned by another module needs its module id and
+             * its offset within that module's block, and neither is an
+             * address -- asking for DIR64 there writes a plausible number
+             * into a slot the thread pointer is then indexed by.
+             */
+            {
+                uint32_t rt;
+                switch (l->kind) {
+                case HLD_DLT_FPTR:   rt = R_IA64_FPTR64MSB;   break;
+                case HLD_DLT_TPREL:  rt = R_IA64_TPREL64MSB;  break;
+                case HLD_DLT_DTPMOD: rt = R_IA64_DTPMOD64MSB; break;
+                case HLD_DLT_DTPREL: rt = R_IA64_DTPREL64MSB; break;
+                default:             rt = R_IA64_DIR64MSB;    break;
+                }
+                reladyn_needs_sym(L, l->g->dynidx, l->g->name);
+                reladyn_add(L, L->dltsec->addr + l->slot, l->g->dynidx, rt, 0);
+            }
         }
         /*
          * Every descriptor in a library: EPLTMSB writes the whole 16-byte

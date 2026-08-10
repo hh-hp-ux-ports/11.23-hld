@@ -887,6 +887,71 @@ if $CC -mlp64 -O2 -fPIC -c $W/farlib.c -o $W/farlib.o 2> $W/cc.err; then
     fi
 fi
 
+# --- thread-local storage in a SHARED LIBRARY -------------------------------
+# Two distinct things, and the first was broken long before the second was
+# even attempted: a library's OWN __thread data, and a __thread owned by
+# another module. Both reach the loader through the general-dynamic pair, and
+# neither can be anchored -- the loader is asked for the owning module and an
+# offset within THAT module's block, not for an address. Anchoring them writes
+# two plausible numbers the thread pointer is then indexed by, so the library
+# links, loads, and dies on first access.
+cat > $W/tlsown.c <<'CEOF'
+__thread int lib_tls = 7;
+int lib_get(void) { return lib_tls; }
+void lib_set(int v) { lib_tls = v; }
+CEOF
+cat > $W/tlsuse.c <<'CEOF'
+extern __thread int lib_tls;          /* owned by the OTHER module */
+int user_get(void) { return lib_tls; }
+void user_set(int v) { lib_tls = v; }
+CEOF
+cat > $W/tlsmain.c <<'CEOF'
+extern int lib_get(void), user_get(void);
+extern void lib_set(int), user_set(int);
+int main(void) {
+    if (user_get() != 7) return 1;    /* initialiser, seen cross-module */
+    user_set(99);
+    if (lib_get() != 99) return 2;    /* consumer's write, seen by the owner */
+    lib_set(42);
+    if (user_get() != 42) return 3;   /* owner's write, seen by the consumer */
+    return 0;
+}
+CEOF
+if $CC -mlp64 -O2 -fPIC -c $W/tlsown.c -o $W/tlsown.o 2> $W/cc.err \
+   && $CC -mlp64 -O2 -fPIC -c $W/tlsuse.c -o $W/tlsuse.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h libtlsown.so -o $W/libtlsown.so $W/tlsown.o 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        # the slots must carry TLS relocations, not plain addresses
+        n=`$RE -r $W/libtlsown.so 2>/dev/null | grep -c "DTPMOD\|DTPREL"`
+        if [ "$n" -lt 2 ]; then
+            echo "FAIL: a library's own __thread got $n TLS relocations, expected 2"
+            echo "      (anchored plain addresses crash on first access)"
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        if $HLD -b +h libtlsuse.so -o $W/libtlsuse.so $W/tlsuse.o \
+                -L$W -ltlsown 2> $W/link.err; then
+            CHECKS=`expr $CHECKS + 1`
+            $CC -mlp64 -o $W/tlsprog $W/tlsmain.c -L$W -ltlsuse -ltlsown \
+                2> $W/link.err
+            SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/tlsprog
+            rc=$?
+            if [ $rc -ne 0 ]; then
+                echo "FAIL: cross-module thread-local: exit $rc"
+                echo "      (1 initialiser, 2 consumer's write, 3 owner's write)"
+                FAIL=1
+            fi
+        else
+            echo "FAIL: a __thread owned by another module:"; cat $W/link.err
+            FAIL=1
+        fi
+    else
+        echo "FAIL: linking a library with its own __thread:"; cat $W/link.err
+        FAIL=1
+    fi
+fi
+
 # --- a function address in static data, from the VENDOR compiler ------------
 # Which relocation carries a function address in static data depends on the
 # compiler, and only one of the two reaches this path: aCC emits FPTR64MSB,

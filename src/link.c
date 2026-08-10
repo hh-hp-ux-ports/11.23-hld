@@ -1254,14 +1254,12 @@ int hld_alloc_linkage(hld_link *L)
                     if (imported) continue;
                 }
                 if (want_opd) dlt_kind = HLD_DLT_FPTR;
-                if ((dlt_kind == HLD_DLT_TPREL || dlt_kind == HLD_DLT_DTPMOD
-                     || dlt_kind == HLD_DLT_DTPREL) && g
-                    && g->kind == HLD_SYM_IMPORT) {
-                    lerr(L, "thread-local `%s' is defined in a shared library;"
-                            " hld cannot resolve that yet", nm, NULL);
-                    free(syms); free(rel);
-                    return -1;
-                }
+                /*
+                 * A thread-local owned by another module used to be refused
+                 * here. It needs no resolving: the slots are the loader's to
+                 * fill, exactly as an imported address is -- see the TLS
+                 * relocation choice in hld_fill_dynamic().
+                 */
                 if (want_opd && !opd_get(L, g, in, off)) goto oom;
                 if (want_dlt && !dlt_get(L, g, in, off, dlt_kind)) goto oom;
                 /*
@@ -1379,9 +1377,15 @@ int hld_build_contents(hld_link *L)
                  * is seeded with the link-time binding as a hint, the way
                  * the platform's linker does; a descriptor slot stays zero,
                  * because only the loader can make the canonical descriptor
-                 * for a function it owns.
+                 * for a function it owns. A thread-local's slots stay zero
+                 * for the same reason -- the module id and the offset within
+                 * ITS block are facts about the other module, and this one
+                 * has no version of them worth writing down.
                  */
-                v = l->kind == HLD_DLT_FPTR ? 0 : l->g->hint;
+                v = (l->kind == HLD_DLT_FPTR || l->kind == HLD_DLT_TPREL
+                     || l->kind == HLD_DLT_DTPMOD
+                     || l->kind == HLD_DLT_DTPREL)
+                    ? 0 : l->g->hint;
             } else if (l->kind == HLD_DLT_FPTR) {
                 lnkent *d = hld_opd_find(L, l->g, l->in, l->off);
                 v = d ? L->opdsec->addr + d->slot : 0;
