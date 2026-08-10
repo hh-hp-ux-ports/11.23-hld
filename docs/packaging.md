@@ -20,7 +20,6 @@ and then gzipped, which takes it from about 1.3 MB to 280 KB.
 | fileset | contents |
 |---|---|
 | `HLD.RUN` | `hld` and `hld-readelf` in `/opt/hld/bin`, plus the licence. Adds `/opt/hld/bin` to `/etc/PATH`. |
-| `HLD.LDOVR` | An `ld` symlink in `/opt/hld/override`, and `/opt/hld/override` placed **ahead of `/usr/ccs/bin`** on `/etc/PATH`, so `ld` resolves to hld. Requires `HLD.RUN`. |
 | `HLD.SRC` | The complete corresponding source under `/opt/hld/src`. |
 
 Installing needs root, and the depot has to be uncompressed first — SD reads a
@@ -28,8 +27,8 @@ plain serial depot and reports a gzipped one as "doesn't look like a tar":
 
 ```
 /usr/contrib/bin/gzip -dc hld-<version>-ia64-11.23.depot.gz > /var/tmp/hld.depot
-swinstall -s /var/tmp/hld.depot HLD        # incl. the ld override
-swinstall -s /var/tmp/hld.depot HLD.RUN    # linker only
+swinstall -s /var/tmp/hld.depot HLD.RUN    # the linker
+swinstall -s /var/tmp/hld.depot HLD        # linker and source
 ```
 
 The source path must be absolute, and the depot should be on local disk —
@@ -54,37 +53,35 @@ So SD-native compression needs root and a directory depot. Gzipping the serial
 depot is the usual way HP-UX depots are handed around anyway, costs nothing to
 undo, and keeps the whole thing buildable as an ordinary user.
 
-## What the ld override does and does not cover
+## Pointing a build at hld
 
-The override works by putting `/opt/hld/override` before `/usr/ccs/bin` on the
-system PATH, so anything that resolves `ld` through PATH — a shell, a
-handwritten makefile — gets hld.
-
-**It does not redirect gcc.** gcc finds its linker through `COMPILER_PATH`,
-which has `/usr/ccs/bin` compiled in, so it keeps using the system linker
-regardless of PATH. To point gcc at hld:
+gcc finds its linker through `COMPILER_PATH`, which has `/usr/ccs/bin` compiled
+in, so PATH alone does not redirect it. Name the directory instead:
 
 ```
-gcc -mlp64 -B/opt/hld/override/ ...
+gcc -mlp64 -B<dir>/ ...        # <dir> holds  ld -> /opt/hld/bin/hld
 ```
 
-That is also the safer way to try hld on a real build, because it applies to
-one invocation instead of the whole machine.
+That applies to one invocation rather than the whole machine, which is what you
+want while hld and the system linker both have work to do. A compiler
+configured `--with-ld=/opt/hld/bin/hld` uses it unconditionally, and then `-B`
+cannot override it — check with `-Wl,-V`, which prints the version of the
+linker that actually ran.
 
-Nothing is overwritten either way: the system linker stays exactly where it
-is, and `/etc/PATH` is backed up (`/etc/PATH.pre-hld`,
-`/etc/PATH.pre-hld-override`) before being edited. Removing the fileset undoes
-the PATH change:
+Nothing is overwritten: the system linker stays where it is, and `/etc/PATH` is
+backed up (`/etc/PATH.pre-hld`) before `HLD.RUN` appends to it.
 
 ```
-swremove HLD.LDOVR      # stop overriding ld, keep hld installed
 swremove HLD            # remove everything
 ```
 
-⚠️ hld is not yet a complete replacement for the system linker — it cannot
-produce shared libraries, among other gaps listed in the README. Installing
-`HLD.LDOVR` on a machine that builds other software will break those builds.
-Prefer `HLD.RUN` plus `-B` until hld covers what you need.
+⚠️ **There was a third fileset, `HLD.LDOVR`, which put an `ld` ahead of
+`/usr/ccs/bin` on `/etc/PATH`. It was removed in 0.12.1.** It never worked —
+`ld` is also reachable as `/usr/bin/ld`, a symlink to the same HP linker, and
+`/usr/bin` comes earlier on `/etc/PATH`, so the fileset installed, reported
+`configured`, and changed nothing. Making it work would be worse than leaving
+it out: hld links LP64 only and refuses ELF32, so a bare `ld` resolving to hld
+breaks every 32-bit link on a machine that needs both. Use `-B` or `--with-ld`.
 
 ## Source, and the licence
 

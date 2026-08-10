@@ -8,12 +8,20 @@
 #
 #   HLD.RUN    the linker and its inspection tool under /opt/hld/bin, and
 #              /opt/hld/bin added to /etc/PATH
-#   HLD.LDOVR  an `ld` alias in /opt/hld/override, placed AHEAD of
-#              /usr/ccs/bin on /etc/PATH so it takes precedence over the
-#              system linker
 #   HLD.SRC    the complete corresponding source under /opt/hld/src, so the
 #              binaries and the source they were built from travel together
 #              (GPLv3 section 6)
+#
+# There was a third, HLD.LDOVR, which put an `ld` alias ahead of /usr/ccs/bin
+# on /etc/PATH. It is REMOVED until 1.0, for two reasons that are worth
+# keeping written down. It never worked: `ld' is also reachable as
+# /usr/bin/ld, a symlink to the same HP linker, and /usr/bin sits earlier on
+# /etc/PATH -- so the fileset installed, reported `configured', and changed
+# nothing. And making it work would be wrong here anyway: this machine's rule
+# is that HP tools win every name collision, and hld refuses ELF32, so a bare
+# `ld' resolving to hld would break every 32-bit link on a box that ships both
+# ABIs. Point a build at hld with `gcc -B<dir>/' or --with-ld instead; both
+# work and neither depends on PATH order.
 #
 # A serial depot is the form swpackage can produce without root, and it is
 # then gzipped, which is how HP-UX depots are normally handed around. SD's own
@@ -54,15 +62,13 @@ if [ ! -x build/hld ]; then
 fi
 
 rm -rf $STAGE $PSF
-mkdir -p $STAGE$PREFIX/bin $STAGE$PREFIX/override $STAGE$PREFIX/src
+mkdir -p $STAGE$PREFIX/bin $STAGE$PREFIX/src
 
 # --- binaries ------------------------------------------------------------
 cp build/hld $STAGE$PREFIX/bin/hld
 cp build/hld-readelf $STAGE$PREFIX/bin/hld-readelf
 chmod 755 $STAGE$PREFIX/bin/hld $STAGE$PREFIX/bin/hld-readelf
 
-# The override is a symlink, so there is exactly one binary to keep in step.
-( cd $STAGE$PREFIX/override && ln -s ../bin/hld ld )
 
 # --- corresponding source ------------------------------------------------
 # Everything the project tracks, which is exactly what hld was built from.
@@ -107,34 +113,6 @@ sed -e 's|:/opt/hld/bin||g' -e 's|^/opt/hld/bin:||' $P > $P.new && mv $P.new $P
 exit 0
 EOF
 
-cat > $STAGE/ctrl/ldovr.postinstall <<'EOF'
-#!/bin/sh
-# Place /opt/hld/override ahead of /usr/ccs/bin so hld's `ld` is found first.
-# Note this governs shell and make invocations of `ld`; gcc locates its
-# linker through COMPILER_PATH, so point gcc at hld with -B/opt/hld/override/.
-P=/etc/PATH
-[ -f $P ] || exit 0
-grep -q "/opt/hld/override" $P && exit 0
-cp -p $P $P.pre-hld-override 2>/dev/null || true
-if grep -q ":/usr/ccs/bin" $P; then
-    sed 's|:/usr/ccs/bin|:/opt/hld/override:/usr/ccs/bin|' $P > $P.new
-elif grep -q "^/usr/ccs/bin" $P; then
-    sed 's|^/usr/ccs/bin|/opt/hld/override:/usr/ccs/bin|' $P > $P.new
-else
-    echo "/opt/hld/override:`cat $P`" > $P.new
-fi
-mv $P.new $P
-exit 0
-EOF
-
-cat > $STAGE/ctrl/ldovr.postremove <<'EOF'
-#!/bin/sh
-P=/etc/PATH
-[ -f $P ] || exit 0
-sed -e 's|/opt/hld/override:||g' -e 's|:/opt/hld/override||g' $P > $P.new && mv $P.new $P
-exit 0
-EOF
-
 chmod 755 $STAGE/ctrl/*
 
 # --- PSF -----------------------------------------------------------------
@@ -174,18 +152,6 @@ product
     postremove  $HERE/$STAGE/ctrl/run.postremove
 `emit_files bin`
     file COPYING COPYING
-  end
-
-  fileset
-    tag         LDOVR
-    title       Install as 'ld', ahead of the system linker on PATH
-    revision    $VERSION
-    directory   $HERE/$STAGE$PREFIX = $PREFIX
-    file_permissions -o bin -g bin
-    corequisite HLD.RUN
-    postinstall $HERE/$STAGE/ctrl/ldovr.postinstall
-    postremove  $HERE/$STAGE/ctrl/ldovr.postremove
-`emit_files override`
   end
 
   fileset
