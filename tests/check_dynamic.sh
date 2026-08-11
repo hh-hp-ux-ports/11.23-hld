@@ -1040,6 +1040,62 @@ if $XAS -mlp64 -o $W/faripad.o $W/faripad.s 2> $W/as.err \
     fi
 fi
 
+# --- a HIDDEN symbol whose address is taken ---------------------------------
+# Interposability is decided during the relocation scan, but whether a symbol
+# is EXPORTED is not settled until the visibility and +e filters run
+# afterwards. A hidden symbol is marked interposable and then never reaches
+# .dynsym, so asking the loader to bind it by name is asking for a symbol that
+# does not exist. 0.11.4 did exactly that and refused any library containing
+# one -- zstd has 367, and nothing here had a single one.
+cat > $W/hid.c <<'CEOF'
+__attribute__((visibility("hidden"))) int hid_impl(void) { return 5; }
+typedef int (*hid_fp)(void);
+/*
+ * Two sites are needed and they must be different ones: the CALL is what
+ * marks the symbol interposable, and the address stored in DATA is what
+ * creates the dynamic relocation that then asks to be bound by name. A
+ * static table gets folded into a direct call at -O2 and tests neither.
+ */
+hid_fp hid_table[1] = { hid_impl };
+int hid_call(void) { return hid_impl(); }
+int hid_public(void) { return hid_table[0]() + hid_call() + 32; }
+CEOF
+cat > $W/hidmain.c <<'CEOF'
+extern int hid_public(void);
+int main(void) { return hid_public() - 42; }
+CEOF
+if $CC -mlp64 -O2 -fPIC -c $W/hid.c -o $W/hid.o 2> $W/cc.err; then
+    CHECKS=`expr $CHECKS + 1`
+    # the fixture is only meaningful if the symbol really is hidden
+    if $RE -s $W/hid.o 2>/dev/null | grep hid_impl | grep -i hidden \
+       > /dev/null 2>&1; then :; else
+        echo "FAIL: the fixture's hid_impl is not HIDDEN; it tests nothing"
+        FAIL=1
+    fi
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b +h libhid.so -o $W/libhid.so $W/hid.o 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        # it must not be exported, and must still work
+        if $RE -s $W/libhid.so 2>/dev/null \
+           | awk '/Symbol table .\.dynsym/{d=1;next} /Symbol table/{d=0} d' \
+           | grep -w hid_impl > /dev/null 2>&1; then
+            echo "FAIL: a hidden symbol was exported"
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        $CC -mlp64 -o $W/hidprog $W/hidmain.c -L$W -lhid 2> $W/link.err
+        SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/hidprog
+        if [ $? -ne 0 ]; then
+            echo "FAIL: a library with a hidden address-taken symbol misbehaved"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: linking a library with a hidden address-taken symbol:"
+        cat $W/link.err
+        FAIL=1
+    fi
+fi
+
 # --- a library's own exported calls stay interposable -----------------------
 # A program may replace a symbol its library uses internally -- C++ requires
 # exactly that for operator new. Binding those calls at link time instead

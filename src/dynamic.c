@@ -749,9 +749,39 @@ int hld_fill_dynamic(hld_link *L)
                     }
                     reladyn_anchored(L, at, a, ty);
                 }
-            } else {
+            } else if (dr->g && dr->g->dynidx) {
                 reladyn_add(L, at, dr->g->dynidx, dr->type, dr->addend);
                 reladyn_needs_sym(L, dr->g->dynidx, dr->g->name);
+            } else {
+                /*
+                 * Named binding was asked for, but the symbol is not in
+                 * .dynsym -- hidden visibility, or an export list left it
+                 * out. Nothing outside this module can name it, so nothing
+                 * can interpose it either, and anchoring is not a fallback
+                 * but the correct answer.
+                 *
+                 * The request is made during the relocation scan, where
+                 * `interposable' is set for every defined symbol in a
+                 * library; whether it is EXPORTED is not settled until
+                 * hld_alloc_dynamic() runs the visibility and +e filters
+                 * afterwards. So the two have to be reconciled here, at the
+                 * only point where both are known. Getting this wrong is how
+                 * 0.11.4 refused any library with a hidden symbol whose
+                 * address is taken -- zstd has 367 of them.
+                 */
+                uint64_t a = hld_target_addr(dr->g, dr->tin, dr->toff);
+                uint32_t ty = dr->type;
+                if (ty == R_IA64_FPTR64MSB || ty == R_IA64_FPTR64LSB) {
+                    lnkent *d2 = hld_opd_find(L, dr->g, dr->tin, dr->toff);
+                    if (!d2) {
+                        snprintf(L->err, HLD_ERRSZ, "internal: no descriptor "
+                                 "for a hidden function whose address is taken");
+                        return -1;
+                    }
+                    a = L->opdsec->addr + d2->slot;
+                    ty = R_IA64_DIR64MSB;
+                }
+                reladyn_anchored(L, at, a, ty);
             }
         }
     }
