@@ -79,6 +79,7 @@ HLD_INLINE void stle64(uint8_t *p, uint64_t v)
 
 #define EI_NIDENT    16
 #define ELFMAG       "\177ELF"
+#define ELFCLASS32 1
 #define ELFCLASS64   2
 #define ELFDATA2MSB  2
 #define EV_CURRENT   1
@@ -99,6 +100,25 @@ HLD_INLINE void stle64(uint8_t *p, uint64_t v)
 #define EF_IA_64_ABI64   0x00000010
 
 /* On-disk record sizes (ELF64) */
+/*
+ * The two ELF classes differ in structure SIZE and, in three places, in field
+ * ORDER and packing -- see the notes at each parse site in elfread.c. hld
+ * keeps 64-bit values internally whatever the class; only the file form
+ * changes.
+ */
+#define EHDR32_SIZE 52
+#define PHDR32_SIZE 32
+#define SHDR32_SIZE 40
+#define SYM32_SIZE  16
+#define RELA32_SIZE 12
+#define DYN32_SIZE   8
+
+#define HLD_IS32(e)    ((e)->eh.cls == ELFCLASS32)
+#define HLD_PHDRSZ(e)  (HLD_IS32(e) ? PHDR32_SIZE : PHDR64_SIZE)
+#define HLD_SHDRSZ(e)  (HLD_IS32(e) ? SHDR32_SIZE : SHDR64_SIZE)
+#define HLD_SYMSZ(e)   (HLD_IS32(e) ? SYM32_SIZE  : SYM64_SIZE)
+#define HLD_RELASZ(e)  (HLD_IS32(e) ? RELA32_SIZE : RELA64_SIZE)
+
 #define EHDR64_SIZE 64
 #define PHDR64_SIZE 56
 #define SHDR64_SIZE 64

@@ -87,11 +87,22 @@ static int img_zero(image *im, uint64_t off, size_t n)
     return img_need(im, (size_t)off + n);
 }
 
-static void put_phdr(uint8_t *p, uint32_t type, uint32_t flags, uint64_t off,
-                     uint64_t vaddr, uint64_t filesz, uint64_t memsz,
-                     uint64_t align)
+static void put_phdr(int e32, uint8_t *p, uint32_t type, uint32_t flags,
+                     uint64_t off, uint64_t vaddr, uint64_t filesz,
+                     uint64_t memsz, uint64_t align)
 {
     st32(p + 0, type);
+    if (e32) {
+        /* ELF32 keeps p_flags LAST; ELF64 moved it up to offset 4. */
+        st32(p + 4, (uint32_t)off);
+        st32(p + 8, (uint32_t)vaddr);
+        st32(p + 12, 0);        /* p_paddr is always 0 on this platform */
+        st32(p + 16, (uint32_t)filesz);
+        st32(p + 20, (uint32_t)memsz);
+        st32(p + 24, flags);
+        st32(p + 28, (uint32_t)align);
+        return;
+    }
     st32(p + 4, flags);
     st64(p + 8, off);
     st64(p + 16, vaddr);
@@ -101,12 +112,24 @@ static void put_phdr(uint8_t *p, uint32_t type, uint32_t flags, uint64_t off,
     st64(p + 48, align);
 }
 
-static void put_shdr(uint8_t *p, uint32_t name, uint32_t type, uint64_t flags,
-                     uint64_t addr, uint64_t off, uint64_t size, uint32_t link,
-                     uint32_t info, uint64_t align, uint64_t entsize)
+static void put_shdr(int e32, uint8_t *p, uint32_t name, uint32_t type,
+                     uint64_t flags, uint64_t addr, uint64_t off,
+                     uint64_t size, uint32_t link, uint32_t info,
+                     uint64_t align, uint64_t entsize)
 {
     st32(p + 0, name);
     st32(p + 4, type);
+    if (e32) {
+        st32(p + 8, (uint32_t)flags);
+        st32(p + 12, (uint32_t)addr);
+        st32(p + 16, (uint32_t)off);
+        st32(p + 20, (uint32_t)size);
+        st32(p + 24, link);
+        st32(p + 28, info);
+        st32(p + 32, (uint32_t)align);
+        st32(p + 36, (uint32_t)entsize);
+        return;
+    }
     st64(p + 8, flags);
     st64(p + 16, addr);
     st64(p + 24, off);
@@ -117,10 +140,20 @@ static void put_shdr(uint8_t *p, uint32_t name, uint32_t type, uint64_t flags,
     st64(p + 56, entsize);
 }
 
-static void put_sym(uint8_t *p, uint32_t name, uint8_t info, uint8_t other,
-                    uint16_t shndx, uint64_t value, uint64_t size)
+static void put_sym(int e32, uint8_t *p, uint32_t name, uint8_t info,
+                    uint8_t other, uint16_t shndx, uint64_t value,
+                    uint64_t size)
 {
     st32(p + 0, name);
+    if (e32) {
+        /* ELF32 orders these name/value/size/info/other/shndx. */
+        st32(p + 4, (uint32_t)value);
+        st32(p + 8, (uint32_t)size);
+        p[12] = info;
+        p[13] = other;
+        st16(p + 14, shndx);
+        return;
+    }
     p[4] = info;
     p[5] = other;
     st16(p + 6, shndx);
@@ -133,8 +166,13 @@ int hld_write_exec(hld_link *L)
     image im;
     strtab shstr, str;
     osec *o;
+    const int e32 = L->elf32;
+    const uint64_t ehsz  = e32 ? EHDR32_SIZE : EHDR64_SIZE;
+    const uint64_t phsz  = e32 ? PHDR32_SIZE : PHDR64_SIZE;
+    const uint64_t shsz  = e32 ? SHDR32_SIZE : SHDR64_SIZE;
+    const uint64_t symsz1 = e32 ? SYM32_SIZE : SYM64_SIZE;
     uint8_t eh[EHDR64_SIZE], ph[PHDR64_SIZE];
-    uint64_t phoff = EHDR64_SIZE, shoff;
+    uint64_t phoff = ehsz, shoff;
     uint32_t nphdr = L->nphdr ? L->nphdr : 3, nsec;
     uint64_t off;
     uint8_t *symbuf = NULL;
@@ -174,9 +212,9 @@ int hld_write_exec(hld_link *L)
     /* --- symbol table ---------------------------------------------------- */
     /* index 0 is the null entry, and ELF wants every local before any global */
     symcap = 64;
-    symbuf = calloc(symcap, SYM64_SIZE);
+    symbuf = calloc(symcap, symsz1);
     if (!symbuf) goto oom;
-    memset(symbuf, 0, SYM64_SIZE);
+    memset(symbuf, 0, (size_t)symsz1);
     nsym = 1;
 
     /*
@@ -219,14 +257,14 @@ int hld_write_exec(hld_link *L)
                     if (!in || !in->out) continue;   /* section not emitted */
 
                     if (nsym == symcap) {
-                        uint8_t *nb = realloc(symbuf, symcap * 2 * SYM64_SIZE);
+                        uint8_t *nb = realloc(symbuf, (size_t)(symcap * 2 * symsz1));
                         if (!nb) { free(syms); goto oom; }
-                        memset(nb + symcap * SYM64_SIZE, 0,
-                               symcap * SYM64_SIZE);
+                        memset(nb + symcap * symsz1, 0,
+                               (size_t)(symcap * symsz1));
                         symbuf = nb;
                         symcap *= 2;
                     }
-                    put_sym(symbuf + nsym * SYM64_SIZE,
+                    put_sym(e32, symbuf + nsym * symsz1,
                             strtab_add(&str, s->name), s->info, s->other,
                             (uint16_t)in->out->shndx,
                             in->out->addr + in->out_off + s->value, s->size);
@@ -246,9 +284,9 @@ int hld_write_exec(hld_link *L)
 
             if (g->kind != HLD_SYM_DEFINED && g->kind != HLD_SYM_ABS) continue;
             if (nsym == symcap) {
-                uint8_t *nb = realloc(symbuf, symcap * 2 * SYM64_SIZE);
+                uint8_t *nb = realloc(symbuf, (size_t)(symcap * 2 * symsz1));
                 if (!nb) goto oom;
-                memset(nb + symcap * SYM64_SIZE, 0, symcap * SYM64_SIZE);
+                memset(nb + symcap * symsz1, 0, (size_t)(symcap * symsz1));
                 symbuf = nb;
                 symcap *= 2;
             }
@@ -256,12 +294,12 @@ int hld_write_exec(hld_link *L)
                 shndx = (uint16_t)g->in->out->shndx;
             nameoff = strtab_add(&str, g->name);
             info = ELF64_ST_INFO(g->bind ? g->bind : STB_GLOBAL, g->type);
-            put_sym(symbuf + nsym * SYM64_SIZE, nameoff, info, g->other,
+            put_sym(e32, symbuf + nsym * symsz1, nameoff, info, g->other,
                     shndx, g->value, g->size);
             nsym++;
         }
     }
-    symsz = nsym * SYM64_SIZE;
+    symsz = nsym * symsz1;
 
     /* --- section header table: .symtab, .strtab, .shstrtab follow ------- */
     {
@@ -304,7 +342,7 @@ int hld_write_exec(hld_link *L)
             /* --- section headers ---------------------------------------- */
             off = (off + 7) & ~7ULL;
             shoff = off;
-            shtab = calloc(nsec, SHDR64_SIZE);
+            shtab = calloc(nsec, (size_t)shsz);
             if (!shtab) { free(names); goto oom; }
 
             k = 0;
@@ -327,19 +365,19 @@ int hld_write_exec(hld_link *L)
                  */
                 if (L->dynamic && o == L->dynsymsec)
                     info = L->ndynlocal ? L->ndynlocal : 1;
-                put_shdr(shtab + o->shndx * SHDR64_SIZE, names[k], o->type,
+                put_shdr(e32, shtab + o->shndx * shsz, names[k], o->type,
                          o->flags, o->addr, o->off, o->size, link, info,
                          o->align, o->entsize);
             }
-            put_shdr(shtab + sym_ndx * SHDR64_SIZE, n_sym, SHT_SYMTAB, 0, 0,
-                     symoff, symsz, str_ndx, nlocal, 8, SYM64_SIZE);
-            put_shdr(shtab + str_ndx * SHDR64_SIZE, n_str, SHT_STRTAB, 0, 0,
+            put_shdr(e32, shtab + sym_ndx * shsz, n_sym, SHT_SYMTAB, 0, 0,
+                     symoff, symsz, str_ndx, nlocal, 8, symsz1);
+            put_shdr(e32, shtab + str_ndx * shsz, n_str, SHT_STRTAB, 0, 0,
                      stroff, str.len, 0, 0, 1, 0);
-            put_shdr(shtab + shstr_ndx * SHDR64_SIZE, n_shstr, SHT_STRTAB, 0, 0,
+            put_shdr(e32, shtab + shstr_ndx * shsz, n_shstr, SHT_STRTAB, 0, 0,
                      shstroff, shstr.len, 0, 0, 1, 0);
             free(names);
 
-            if (img_write(&im, shoff, shtab, (size_t)nsec * SHDR64_SIZE) < 0) {
+            if (img_write(&im, shoff, shtab, (size_t)nsec * (size_t)shsz) < 0) {
                 free(shtab);
                 goto oom;
             }
@@ -354,15 +392,15 @@ int hld_write_exec(hld_link *L)
         {
             uint32_t pi = 0;
 #define PUT_PH(t, fl, of, va, fs, ms, al) do { \
-                put_phdr(ph, (t), (fl), (of), (va), (fs), (ms), (al)); \
-                if (img_write(&im, phoff + pi * PHDR64_SIZE, ph, \
-                              PHDR64_SIZE) < 0) goto oom; \
+                put_phdr(e32, ph, (t), (fl), (of), (va), (fs), (ms), (al)); \
+                if (img_write(&im, phoff + pi * phsz, ph, \
+                              (size_t)phsz) < 0) goto oom; \
                 pi++; \
             } while (0)
 
-            PUT_PH(PT_PHDR, PF_R, phoff, HLD_TEXT_BASE + phoff,
-                   (uint64_t)nphdr * PHDR64_SIZE,
-                   (uint64_t)nphdr * PHDR64_SIZE, 8);
+            PUT_PH(PT_PHDR, PF_R, phoff, HLD_TEXTBASE(L) + phoff,
+                   (uint64_t)nphdr * phsz,
+                   (uint64_t)nphdr * phsz, 8);
             if (L->dynamic) {
                 /* A library is not started by the kernel: no interpreter. */
                 if (L->interpsec)
@@ -375,7 +413,7 @@ int hld_write_exec(hld_link *L)
             }
             PUT_PH(PT_LOAD,
                    PF_R | PF_X | PF_HP_CODE | PF_HP_LAZYSWAP | PF_HP_UNNAMED17,
-                   0, HLD_TEXT_BASE, L->text_filesz, L->text_filesz, 0x10);
+                   0, HLD_TEXTBASE(L), L->text_filesz, L->text_filesz, 0x10);
             PUT_PH(PT_LOAD, PF_R | PF_W | PF_HP_MODIFY, L->data_off,
                    L->data_addr, L->data_filesz, L->data_memsz, 0x10);
             if (L->has_tls)
@@ -393,7 +431,7 @@ int hld_write_exec(hld_link *L)
         /* --- ELF header -------------------------------------------------- */
         memset(eh, 0, sizeof eh);
         memcpy(eh, ELFMAG, 4);
-        eh[4] = ELFCLASS64;
+        eh[4] = e32 ? ELFCLASS32 : ELFCLASS64;
         eh[5] = ELFDATA2MSB;
         eh[6] = EV_CURRENT;
         eh[7] = ELFOSABI_HPUX;
@@ -401,18 +439,33 @@ int hld_write_exec(hld_link *L)
         st16(eh + 16, L->shared ? ET_DYN : ET_EXEC);
         st16(eh + 18, EM_IA_64);
         st32(eh + 20, EV_CURRENT);
-        st64(eh + 24, L->entry);
-        st64(eh + 32, phoff);
-        st64(eh + 40, shoff);
-        st32(eh + 48, EF_IA_64_BE | EF_IA_64_ABI64
-                      | (L->trapnil ? EF_IA_64_TRAPNIL : 0));
-        st16(eh + 52, EHDR64_SIZE);
-        st16(eh + 54, PHDR64_SIZE);
-        st16(eh + 56, (uint16_t)nphdr);
-        st16(eh + 58, SHDR64_SIZE);
-        st16(eh + 60, (uint16_t)nsec);
-        st16(eh + 62, (uint16_t)shstr_ndx);
-        if (img_write(&im, 0, eh, EHDR64_SIZE) < 0) goto oom;
+        if (e32) {
+            /* EF_IA_64_ABI64 says 64-bit ABI; an ILP32 image must not set it. */
+            st32(eh + 24, (uint32_t)L->entry);
+            st32(eh + 28, (uint32_t)phoff);
+            st32(eh + 32, (uint32_t)shoff);
+            st32(eh + 36, EF_IA_64_BE
+                          | (L->trapnil ? EF_IA_64_TRAPNIL : 0));
+            st16(eh + 40, (uint16_t)ehsz);
+            st16(eh + 42, (uint16_t)phsz);
+            st16(eh + 44, (uint16_t)nphdr);
+            st16(eh + 46, (uint16_t)shsz);
+            st16(eh + 48, (uint16_t)nsec);
+            st16(eh + 50, (uint16_t)shstr_ndx);
+        } else {
+            st64(eh + 24, L->entry);
+            st64(eh + 32, phoff);
+            st64(eh + 40, shoff);
+            st32(eh + 48, EF_IA_64_BE | EF_IA_64_ABI64
+                          | (L->trapnil ? EF_IA_64_TRAPNIL : 0));
+            st16(eh + 52, (uint16_t)ehsz);
+            st16(eh + 54, (uint16_t)phsz);
+            st16(eh + 56, (uint16_t)nphdr);
+            st16(eh + 58, (uint16_t)shsz);
+            st16(eh + 60, (uint16_t)nsec);
+            st16(eh + 62, (uint16_t)shstr_ndx);
+        }
+        if (img_write(&im, 0, eh, (size_t)ehsz) < 0) goto oom;
     }
 
     /* --- out ------------------------------------------------------------- */

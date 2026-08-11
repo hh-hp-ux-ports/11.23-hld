@@ -73,9 +73,15 @@ int hld_add_object(hld_link *L, const char *path)
         hld_elf_free(e);
         return -1;
     }
-    if (!(e->eh.flags & EF_IA_64_ABI64)) {
-        lerr(L, "%s: ILP32 object — hld links LP64 only, and nothing else is "
-                "supported yet", path, NULL);
+    /*
+     * EF_IA_64_ABI64 and the ELF class must agree: an LP64 object sets the
+     * flag and is ELFCLASS64, an ILP32 one does neither. A file that says one
+     * and not the other is malformed, and taking either at its word would put
+     * half the link in the wrong address quadrant.
+     */
+    if (!(e->eh.flags & EF_IA_64_ABI64) != HLD_IS32(e)) {
+        lerr(L, "%s: ELF class and the ABI64 flag disagree about which ABI "
+                "this object is", path, NULL);
         hld_elf_free(e);
         return -1;
     }
@@ -432,6 +438,24 @@ static int resolve_symbols_of(hld_link *L, hld_elf *e)
  */
 int hld_input_object(hld_link *L, hld_elf *e)
 {
+    /*
+     * The output's class follows its inputs -- there is no flag to get wrong,
+     * and the first object decides. Mixing is refused rather than resolved:
+     * the two ABIs have different pointer widths and different address
+     * quadrants, so no output can satisfy both, and picking one silently
+     * would relocate half the link into the wrong quadrant.
+     */
+    if (!L->class_seen) {
+        L->elf32 = HLD_IS32(e);
+        L->class_seen = 1;
+    } else if (L->elf32 != HLD_IS32(e)) {
+        lerr(L, "%s: %s input, but this link is already the other ELF class"
+                " -- the two ABIs have different pointer widths and address"
+                " quadrants, so one output cannot serve both",
+             e->path, HLD_IS32(e) ? "ELF32" : "ELF64");
+        return -1;
+    }
+
     if (L->nobjs == L->objs_cap) {
         size_t nc = L->objs_cap ? L->objs_cap * 2 : 8;
         hld_elf **na = realloc(L->objs, nc * sizeof *na);
@@ -659,8 +683,8 @@ int hld_layout(hld_link *L)
 
     /* text segment */
     off = (uint64_t)EHDR64_SIZE + (uint64_t)nphdr * PHDR64_SIZE;
-    addr = HLD_TEXT_BASE + off;
-    L->text_addr = HLD_TEXT_BASE;
+    addr = HLD_TEXTBASE(L) + off;
+    L->text_addr = HLD_TEXTBASE(L);
 
     /*
      * The unwind header, table and descriptors lead the text segment and stay
@@ -708,7 +732,7 @@ int hld_layout(hld_link *L)
      *                       ^ gp anchors here
      */
     off = align_up(off, HLD_SEG_ALIGN);
-    addr = HLD_DATA_BASE;
+    addr = HLD_DATABASE(L);
     L->data_addr = addr;
     L->data_off = off;
 
@@ -1753,7 +1777,7 @@ int hld_relocate(hld_link *L)
                 case R_IA64_SEGREL32LSB:
                 case R_IA64_SEGREL64MSB:
                 case R_IA64_SEGREL64LSB: {
-                    uint64_t base = (S >= HLD_DATA_BASE) ? L->data_addr
+                    uint64_t base = (S >= HLD_DATABASE(L)) ? L->data_addr
                                                          : L->text_addr;
                     V = S - base;
                     break;

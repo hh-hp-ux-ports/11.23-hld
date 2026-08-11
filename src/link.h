@@ -8,9 +8,18 @@
 #include "elf64.h"
 #include "version.h"
 
-/* HP-UX/IPF LP64 address space (docs/format-notes.md). */
+/*
+ * HP-UX/IPF address space (docs/format-notes.md). The quadrants differ by ABI
+ * -- measured from real binaries: an LP64 image loads text at 0x4000...0000
+ * and data at 0x6000...0000, an ILP32 one at 0x04000000 and 0x40000000.
+ */
 #define HLD_TEXT_BASE 0x4000000000000000ULL
 #define HLD_DATA_BASE 0x6000000000000000ULL
+#define HLD_TEXT_BASE32 0x04000000ULL
+#define HLD_DATA_BASE32 0x40000000ULL
+/* Whichever this link is producing. */
+#define HLD_TEXTBASE(L) ((L)->elf32 ? HLD_TEXT_BASE32 : HLD_TEXT_BASE)
+#define HLD_DATABASE(L) ((L)->elf32 ? HLD_DATA_BASE32 : HLD_DATA_BASE)
 #define HLD_SEG_ALIGN 0x10000ULL   /* file offset must be congruent to vaddr */
 
 struct osec;
@@ -322,6 +331,8 @@ typedef struct {
     /* options */
     const char *out_path;
     const char *entry_name;
+    int elf32;                /* ILP32 output: follows the input objects */
+    int class_seen;           /* an input has fixed the class */
     int trapnil;              /* -z */
     int no_undefined;         /* +noallowunsats */
     int map;                  /* -m */

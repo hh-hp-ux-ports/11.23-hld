@@ -84,7 +84,7 @@ hld_elf *hld_elf_from_memory(const char *name, uint8_t *data, size_t size,
     e->owns_data = owns_data;
     if (!e->path) goto fail_noerr;
 
-    if (e->size < EHDR64_SIZE || memcmp(e->data, ELFMAG, 4) != 0) {
+    if (e->size < EHDR32_SIZE || memcmp(e->data, ELFMAG, 4) != 0) {
         seterr(err, "%s: not an ELF file", path, NULL);
         goto fail_noerr;
     }
@@ -93,9 +93,8 @@ hld_elf *hld_elf_from_memory(const char *name, uint8_t *data, size_t size,
     e->eh.data   = p[5];
     e->eh.osabi  = p[7];
     e->eh.abiver = p[8];
-    if (e->eh.cls != ELFCLASS64) {
-        seterr(err, "%s: ELF32 input — hld links LP64 only, and nothing else "
-                    "is supported yet", path, NULL);
+    if (e->eh.cls != ELFCLASS64 && e->eh.cls != ELFCLASS32) {
+        seterr(err, "%s: not a 32- or 64-bit ELF file", path, NULL);
         goto fail_noerr;
     }
     if (e->eh.data != ELFDATA2MSB) {
@@ -105,28 +104,55 @@ hld_elf *hld_elf_from_memory(const char *name, uint8_t *data, size_t size,
     }
     e->eh.type      = be16(p + 16);
     e->eh.machine   = be16(p + 18);
-    e->eh.entry     = be64(p + 24);
-    e->eh.phoff     = be64(p + 32);
-    e->eh.shoff     = be64(p + 40);
-    e->eh.flags     = be32(p + 48);
-    e->eh.phentsize = be16(p + 54);
-    e->eh.phnum     = be16(p + 56);
-    e->eh.shentsize = be16(p + 58);
-    e->eh.shnum     = be16(p + 60);
-    e->eh.shstrndx  = be16(p + 62);
+    if (HLD_IS32(e)) {
+        e->eh.entry     = be32(p + 24);
+        e->eh.phoff     = be32(p + 28);
+        e->eh.shoff     = be32(p + 32);
+        e->eh.flags     = be32(p + 36);
+        e->eh.phentsize = be16(p + 42);
+        e->eh.phnum     = be16(p + 44);
+        e->eh.shentsize = be16(p + 46);
+        e->eh.shnum     = be16(p + 48);
+        e->eh.shstrndx  = be16(p + 50);
+    } else {
+        e->eh.entry     = be64(p + 24);
+        e->eh.phoff     = be64(p + 32);
+        e->eh.shoff     = be64(p + 40);
+        e->eh.flags     = be32(p + 48);
+        e->eh.phentsize = be16(p + 54);
+        e->eh.phnum     = be16(p + 56);
+        e->eh.shentsize = be16(p + 58);
+        e->eh.shnum     = be16(p + 60);
+        e->eh.shstrndx  = be16(p + 62);
+    }
 
     if (e->eh.phnum) {
-        if (e->eh.phentsize != PHDR64_SIZE
-            || !in_file(e, e->eh.phoff, (uint64_t)e->eh.phnum * PHDR64_SIZE)) {
+        if (e->eh.phentsize != HLD_PHDRSZ(e)
+            || !in_file(e, e->eh.phoff, (uint64_t)e->eh.phnum * HLD_PHDRSZ(e))) {
             seterr(err, "%s: program header table out of bounds", path, NULL);
             goto fail_noerr;
         }
         e->phdrs = calloc(e->eh.phnum, sizeof *e->phdrs);
         if (!e->phdrs) { seterr(err, "out of memory", NULL, NULL); goto fail_noerr; }
         for (i = 0; i < e->eh.phnum; i++) {
-            const uint8_t *q = e->data + e->eh.phoff + (uint64_t)i * PHDR64_SIZE;
+            const uint8_t *q = e->data + e->eh.phoff
+                               + (uint64_t)i * HLD_PHDRSZ(e);
             hld_phdr *ph = &e->phdrs[i];
             ph->type   = be32(q + 0);
+            if (HLD_IS32(e)) {
+                /*
+                 * ⚠️ ELF32 puts p_flags at the END, after p_memsz -- ELF64
+                 * moved it to offset 4. Reading it at 4 here yields p_offset
+                 * as the flags, which is a plausible-looking number.
+                 */
+                ph->offset = be32(q + 4);
+                ph->vaddr  = be32(q + 8);
+                ph->paddr  = be32(q + 12);
+                ph->filesz = be32(q + 16);
+                ph->memsz  = be32(q + 20);
+                ph->flags  = be32(q + 24);
+                ph->align  = be32(q + 28);
+            } else {
             ph->flags  = be32(q + 4);
             ph->offset = be64(q + 8);
             ph->vaddr  = be64(q + 16);
@@ -134,30 +160,43 @@ hld_elf *hld_elf_from_memory(const char *name, uint8_t *data, size_t size,
             ph->filesz = be64(q + 32);
             ph->memsz  = be64(q + 40);
             ph->align  = be64(q + 48);
+            }
         }
     }
 
     if (e->eh.shnum) {
-        if (e->eh.shentsize != SHDR64_SIZE
-            || !in_file(e, e->eh.shoff, (uint64_t)e->eh.shnum * SHDR64_SIZE)) {
+        if (e->eh.shentsize != HLD_SHDRSZ(e)
+            || !in_file(e, e->eh.shoff, (uint64_t)e->eh.shnum * HLD_SHDRSZ(e))) {
             seterr(err, "%s: section header table out of bounds", path, NULL);
             goto fail_noerr;
         }
         e->shdrs = calloc(e->eh.shnum, sizeof *e->shdrs);
         if (!e->shdrs) { seterr(err, "out of memory", NULL, NULL); goto fail_noerr; }
         for (i = 0; i < e->eh.shnum; i++) {
-            const uint8_t *q = e->data + e->eh.shoff + (uint64_t)i * SHDR64_SIZE;
+            const uint8_t *q = e->data + e->eh.shoff
+                               + (uint64_t)i * HLD_SHDRSZ(e);
             hld_shdr *sh = &e->shdrs[i];
             sh->name_off  = be32(q + 0);
             sh->type      = be32(q + 4);
-            sh->flags     = be64(q + 8);
-            sh->addr      = be64(q + 16);
-            sh->offset    = be64(q + 24);
-            sh->size      = be64(q + 32);
-            sh->link      = be32(q + 40);
-            sh->info      = be32(q + 44);
-            sh->addralign = be64(q + 48);
-            sh->entsize   = be64(q + 56);
+            if (HLD_IS32(e)) {
+                sh->flags     = be32(q + 8);
+                sh->addr      = be32(q + 12);
+                sh->offset    = be32(q + 16);
+                sh->size      = be32(q + 20);
+                sh->link      = be32(q + 24);
+                sh->info      = be32(q + 28);
+                sh->addralign = be32(q + 32);
+                sh->entsize   = be32(q + 36);
+            } else {
+                sh->flags     = be64(q + 8);
+                sh->addr      = be64(q + 16);
+                sh->offset    = be64(q + 24);
+                sh->size      = be64(q + 32);
+                sh->link      = be32(q + 40);
+                sh->info      = be32(q + 44);
+                sh->addralign = be64(q + 48);
+                sh->entsize   = be64(q + 56);
+            }
             sh->name      = "";
         }
         /* resolve names via shstrtab */
@@ -230,22 +269,38 @@ hld_sym *hld_read_syms(const hld_elf *e, const hld_shdr *sh, size_t *count, char
 
     *count = 0;
     if (!base) return NULL;
-    if (sh->entsize != SYM64_SIZE || sh->size % SYM64_SIZE) {
+    if (sh->entsize != HLD_SYMSZ(e) || sh->size % HLD_SYMSZ(e)) {
         seterr(err, "%s: %s: bad symbol entry size", e->path, sh->name);
         return NULL;
     }
-    n = sh->size / SYM64_SIZE;
+    n = sh->size / HLD_SYMSZ(e);
     out = calloc(n ? n : 1, sizeof *out);
     if (!out) { seterr(err, "out of memory", NULL, NULL); return NULL; }
     for (i = 0; i < n; i++) {
-        const uint8_t *q = base + i * SYM64_SIZE;
+        const uint8_t *q = base + i * HLD_SYMSZ(e);
         hld_sym *s = &out[i];
         s->name_off = be32(q + 0);
-        s->info     = q[4];
-        s->other    = q[5];
-        s->shndx    = be16(q + 6);
-        s->value    = be64(q + 8);
-        s->size     = be64(q + 16);
+        if (HLD_IS32(e)) {
+            /*
+             * ⚠️ ELF32 and ELF64 order these DIFFERENTLY. ELF32 is
+             * name/value/size/info/other/shndx; ELF64 moved info, other and
+             * shndx ahead of value so the 8-byte fields stay aligned. Using
+             * the 64-bit order on a 32-bit table reads the value as the
+             * info/other/shndx triple and gets a symbol type out of an
+             * address -- every symbol wrong, none of them obviously so.
+             */
+            s->value    = be32(q + 4);
+            s->size     = be32(q + 8);
+            s->info     = q[12];
+            s->other    = q[13];
+            s->shndx    = be16(q + 14);
+        } else {
+            s->info     = q[4];
+            s->other    = q[5];
+            s->shndx    = be16(q + 6);
+            s->value    = be64(q + 8);
+            s->size     = be64(q + 16);
+        }
         s->name     = hld_strtab_str(e, sh->link, s->name_off);
     }
     *count = n;
@@ -260,16 +315,30 @@ hld_rela *hld_read_relas(const hld_elf *e, const hld_shdr *sh, size_t *count, ch
 
     *count = 0;
     if (!base) return NULL;
-    if (sh->entsize != RELA64_SIZE || sh->size % RELA64_SIZE) {
+    if (sh->entsize != HLD_RELASZ(e) || sh->size % HLD_RELASZ(e)) {
         seterr(err, "%s: %s: bad rela entry size", e->path, sh->name);
         return NULL;
     }
-    n = sh->size / RELA64_SIZE;
+    n = sh->size / HLD_RELASZ(e);
     out = calloc(n ? n : 1, sizeof *out);
     if (!out) { seterr(err, "out of memory", NULL, NULL); return NULL; }
     for (i = 0; i < n; i++) {
-        const uint8_t *q = base + i * RELA64_SIZE;
-        uint64_t info = be64(q + 8);
+        const uint8_t *q = base + i * HLD_RELASZ(e);
+        uint64_t info;
+        if (HLD_IS32(e)) {
+            /*
+             * ⚠️ r_info splits 8/24 here, not 32/32: the symbol index is the
+             * TOP 24 bits and the type the bottom 8. Applying the 64-bit
+             * split gives symbol 0 and a type built from the index.
+             */
+            uint32_t i32 = be32(q + 4);
+            out[i].offset = be32(q + 0);
+            out[i].sym    = i32 >> 8;
+            out[i].type   = i32 & 0xff;
+            out[i].addend = (int64_t)(int32_t)be32(q + 8);
+            continue;
+        }
+        info = be64(q + 8);
         out[i].offset = be64(q + 0);
         out[i].sym    = ELF64_R_SYM(info);
         out[i].type   = ELF64_R_TYPE(info);
