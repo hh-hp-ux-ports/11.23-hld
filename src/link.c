@@ -1086,6 +1086,17 @@ static int hld_dynrel_type(hld_link *L, const hld_gsym *g, uint32_t type,
         /* The canonical descriptor is the defining module's to make. */
         *out = R_IA64_FPTR64MSB;
         return 1;
+    case R_IA64_IPLTMSB:
+    case R_IA64_IPLTLSB:
+        /*
+         * Sixteen bytes for the loader to fill with a descriptor. Where the
+         * name survives into .dynsym this is emitted as-is and interposes;
+         * where it does not, the emission path writes the two words as
+         * anchored pointers instead -- an unnamed IPLT would leave the
+         * loader with no definition to build a descriptor from.
+         */
+        *out = R_IA64_IPLTMSB;
+        return 1;
     default:
         return 0;
     }
@@ -1162,6 +1173,7 @@ int hld_alloc_linkage(hld_link *L)
                 uint64_t off;
                 const char *nm;
                 int want_dlt = 0, want_opd = 0, want_pltoff = 0, want_dyn = 0, want_call = 0;
+                int want_ipltd = 0;
                 int dlt_kind = HLD_DLT_PLAIN;
                 uint32_t dtype;
 
@@ -1222,6 +1234,21 @@ int hld_alloc_linkage(hld_link *L)
                     want_pltoff = 1;
                     break;
                 /*
+                 * A descriptor written at the site itself -- a C++ vtable
+                 * slot. BOTH of its words move with the load address: the
+                 * entry point and the gp. In a library that makes it the
+                 * loader's to fill, exactly as HP's linker treats it (its
+                 * libCsup.so.1 carries 1151 dynamic IPLT relocations, the
+                 * first two of them the very type_info methods a catch by
+                 * type calls). Writing link-time values here and stopping is
+                 * what sent every virtual call in an hld-built library to an
+                 * unrelocated address.
+                 */
+                case R_IA64_IPLTMSB:
+                case R_IA64_IPLTLSB:
+                    want_ipltd = want_dyn = 1;
+                    break;
+                /*
                  * A call. In a library, one to a symbol the library exports
                  * has to go through the linkage table so that whatever loads
                  * it can substitute its own definition -- the platform's
@@ -1245,7 +1272,8 @@ int hld_alloc_linkage(hld_link *L)
                  * reach the same one or a function ends up with two
                  * addresses in one process.
                  */
-                if ((want_call || want_opd) && L->shared && !L->bsymbolic
+                if ((want_call || want_opd || want_ipltd) && L->shared
+                    && !L->bsymbolic
                     && g && g->kind == HLD_SYM_DEFINED)
                     g->interposable = 1;
                 if (want_call) continue;
@@ -1609,22 +1637,28 @@ int hld_relocate(hld_link *L)
                  * is placed here rather than through the field inserter.
                  */
                 case R_IA64_IPLTMSB:
-                case R_IA64_IPLTLSB:
-                    if (tg && tg->kind == HLD_SYM_IMPORT) {
-                        snprintf(L->err, HLD_ERRSZ,
-                                 "%s: `%s' is imported and needs a descriptor "
-                                 "bound at run time, which hld cannot emit yet",
-                                 e->path, sname);
-                        goto rfail;
-                    }
+                case R_IA64_IPLTLSB: {
+                    /*
+                     * An import's descriptor is the defining module's to
+                     * build, so leave the pair empty and let the dynamic
+                     * relocation recorded for this site fill it. This used to
+                     * refuse the link outright; HP's linker emits exactly
+                     * this (`strlen + 0' among libCsup.so.1's IPLT entries),
+                     * and a vtable naming an imported virtual function is
+                     * ordinary C++.
+                     */
+                    int imp = tg && tg->kind == HLD_SYM_IMPORT;
+                    uint64_t dentry = imp ? 0 : S;
+                    uint64_t dgp = imp ? 0 : L->gp;
                     if (r->type == R_IA64_IPLTMSB) {
-                        st64(dst + r->offset, S);
-                        st64(dst + r->offset + 8, L->gp);
+                        st64(dst + r->offset, dentry);
+                        st64(dst + r->offset + 8, dgp);
                     } else {
-                        stle64(dst + r->offset, S);
-                        stle64(dst + r->offset + 8, L->gp);
+                        stle64(dst + r->offset, dentry);
+                        stle64(dst + r->offset + 8, dgp);
                     }
                     continue;
+                }
 
                 /* The descriptor's own address. */
                 case R_IA64_FPTR64I:

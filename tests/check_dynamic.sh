@@ -696,6 +696,97 @@ if /opt/gcc474/bin/gcc -mlp64 -g -O0 -c $W/dbg.c -o $W/dbg.o 2> $W/cc.err ||
     fi
 fi
 
+# --- a virtual call through a vtable in a SHARED library ------------------
+# A C++ vtable slot is a function descriptor written at the site itself,
+# through an IPLT relocation. Both of its words -- the entry point and the
+# gp -- move with the load address, so in a library the loader has to fill
+# them; hld used to write link-time values and emit no dynamic relocation at
+# all, and every virtual call through such a vtable then went to an
+# unrelocated address. The library must be SHARED and the call must actually
+# RUN: linking succeeds either way, and a static link needs no relocation, so
+# neither half of this catches it alone. Found in the field, where the only
+# visible symptom was that C++ `catch (const T&)' crashed while `catch (...)'
+# did not -- the personality routine calls std::type_info::__is_pointer_p
+# virtually, and nothing else in the failing program did.
+CXXV=
+for cand in /opt/gcc474/bin/g++ g++; do
+    if command -v "$cand" > /dev/null 2>&1; then CXXV=$cand; break; fi
+done
+if [ -n "$CXXV" ]; then
+    mkdir -p $W/vdir
+    rm -f $W/vdir/ld
+    ln -s "`pwd`/$HLD" $W/vdir/ld
+    cat > $W/vlib.cc <<'CEOF'
+struct S { virtual int f(); virtual int g(); };
+int S::f() { return 42; }
+int S::g() { return 7; }
+static S obj;
+extern "C" S *get(void) { return &obj; }
+CEOF
+    cat > $W/vmain.cc <<'CEOF'
+struct S { virtual int f(); virtual int g(); };
+extern "C" S *get(void);
+extern "C" int printf(const char *, ...);
+int main(void) {
+    S *p = get();
+    int v = p->f() + p->g();
+    printf("v=%d\n", v);
+    return v == 49 ? 0 : 1;
+}
+CEOF
+    CHECKS=`expr $CHECKS + 1`
+    if $CXXV -mlp64 -fPIC -fno-exceptions -fno-rtti -c $W/vlib.cc -o $W/vlib.o \
+         2> $W/vc.err &&
+       $CXXV -mlp64 -fno-exceptions -fno-rtti -c $W/vmain.cc -o $W/vmain.o \
+         2>> $W/vc.err; then
+        CHECKS=`expr $CHECKS + 1`
+        if $CXXV -mlp64 -shared -fPIC -B$W/vdir/ $W/vlib.o -o $W/libvt.so \
+             2> $W/vl.err &&
+           $CXXV -mlp64 -B$W/vdir/ $W/vmain.o -o $W/vtprog -L$W -lvt \
+             -Wl,+b,$W 2>> $W/vl.err; then
+            CHECKS=`expr $CHECKS + 1`
+            #
+            # An unrelocated descriptor does not reliably fault: the entry
+            # word lands wherever the link-time address happens to be in the
+            # running image, and this fixture SPINS rather than dying. So the
+            # run is capped -- a test that hangs the suite reports nothing.
+            #
+            ( ulimit -t 10
+              SHLIB_PATH=$W $W/vtprog > $W/vt.out 2> $W/vt.err )
+            rc=$?
+            if [ $rc -ne 0 ]; then
+                echo "FAIL: virtual call through a shared library's vtable" \
+                     "exited $rc (a descriptor the loader never filled)"
+                [ -s $W/vt.err ] && cat $W/vt.err
+                FAIL=1
+            elif [ "`cat $W/vt.out 2>/dev/null`" = "v=49" ]; then
+                CHECKS=`expr $CHECKS + 1`
+                #
+                # And the relocations really are there. Without this a future
+                # change could satisfy the run by accident -- the fixture
+                # passed against a BROKEN linker once already, when -O2 turned
+                # the virtual calls into direct ones.
+                #
+                nd=`$RE -r $W/libvt.so 2>/dev/null | grep -c 'IPLT'`
+                if [ "$nd" -lt 1 ]; then
+                    echo "FAIL: the shared library carries no IPLT dynamic" \
+                         "relocation, so its vtable was not left to the loader"
+                    FAIL=1
+                fi
+            else
+                echo "FAIL: virtual call printed \"`cat $W/vt.out`\", want v=49"
+                FAIL=1
+            fi
+        else
+            echo "FAIL: linking the vtable test:"; cat $W/vl.err
+            FAIL=1
+        fi
+    else
+        echo "FAIL: compiling the vtable test:"; cat $W/vc.err
+        FAIL=1
+    fi
+fi
+
 # --- C++: exceptions, iostreams, and another module's data ----------------
 # A C++ program reads the C library's own data — the FILE table behind
 # stdout, the ctype masks, errno — both through linkage-table slots and

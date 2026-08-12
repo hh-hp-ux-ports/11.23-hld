@@ -158,6 +158,8 @@ int hld_alloc_dynamic(hld_link *L)
     hld_dso *d;
     lnkent *l;
     uint64_t nimp = 0;
+    uint64_t niplt = 0;
+    size_t dn;
 
     if (!L->dynamic) return 0;
 
@@ -377,10 +379,24 @@ int hld_alloc_dynamic(hld_link *L)
      * link time. In an executable both are final and none is needed.
      */
     L->nopdrel = L->shared ? L->nopd : 0;
+    /*
+     * A descriptor written at its own site costs a SECOND entry whenever the
+     * function cannot be named -- entry word and gp word, instead of the one
+     * IPLT the loader would have filled. Which of the two it will be is not
+     * known until .dynsym is final, so reserve for the larger and let the
+     * trim after filling give the space back. Reserving too few is caught as
+     * an overflow; reserving too many would leave type-0 entries, and the
+     * size is reset to what was written for exactly that reason.
+     */
+    for (dn = 0; dn < L->ndynrel; dn++)
+        if (L->dynrels[dn].type == R_IA64_IPLTMSB
+            || L->dynrels[dn].type == R_IA64_IPLTLSB)
+            niplt++;
     if (nimp || L->ndltrel || L->ndynrel || L->nopdrel) {
         o = osec_get(L, ".rela.dyn", SHT_RELA, SHF_ALLOC);
         if (!o) return -1;
-        o->size = (nimp + L->ndltrel + L->ndynrel + L->nopdrel) * RELA64_SIZE;
+        o->size = (nimp + L->ndltrel + L->ndynrel + L->nopdrel + niplt)
+                  * RELA64_SIZE;
         o->align = 8;
         o->entsize = RELA64_SIZE;
         L->reladynsec = o;
@@ -503,6 +519,20 @@ static void reladyn_anchored(hld_link *L, uint64_t at, uint64_t a, uint32_t type
     int text = a < L->data_addr;
     uint64_t base = seg_anchor_addr(L, text ? L->text_addr : L->data_addr);
     reladyn_add(L, at, text ? L->anchor_text : L->anchor_data, type, a - base);
+}
+
+/*
+ * Sixteen bytes holding a descriptor for a function nothing outside this
+ * module can name -- a vtable slot for a hidden or anonymous-namespace
+ * method. An IPLT asks the LOADER to build the descriptor, and it can only
+ * do that from a name, so the two words are relocated as what they are:
+ * the entry point, and this module's gp. Both move with the load address,
+ * and each is anchored to the segment it lives in.
+ */
+static void reladyn_desc_anchored(hld_link *L, uint64_t at, uint64_t entry)
+{
+    reladyn_anchored(L, at, entry, R_IA64_DIR64MSB);
+    reladyn_anchored(L, at + 8, L->gp, R_IA64_DIR64MSB);
 }
 
 
@@ -728,6 +758,10 @@ int hld_fill_dynamic(hld_link *L)
                 {
                     uint64_t a = hld_target_addr(dr->g, dr->tin, dr->toff);
                     uint32_t ty = dr->type;
+                    if (ty == R_IA64_IPLTMSB || ty == R_IA64_IPLTLSB) {
+                        reladyn_desc_anchored(L, at, a);
+                        continue;
+                    }
                     if (ty == R_IA64_FPTR64MSB || ty == R_IA64_FPTR64LSB) {
                         /*
                          * FPTR asks the LOADER to produce the canonical
@@ -771,6 +805,10 @@ int hld_fill_dynamic(hld_link *L)
                  */
                 uint64_t a = hld_target_addr(dr->g, dr->tin, dr->toff);
                 uint32_t ty = dr->type;
+                if (ty == R_IA64_IPLTMSB || ty == R_IA64_IPLTLSB) {
+                    reladyn_desc_anchored(L, at, a);
+                    continue;
+                }
                 if (ty == R_IA64_FPTR64MSB || ty == R_IA64_FPTR64LSB) {
                     lnkent *d2 = hld_opd_find(L, dr->g, dr->tin, dr->toff);
                     if (!d2) {
