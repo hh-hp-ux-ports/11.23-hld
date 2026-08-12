@@ -208,7 +208,7 @@ case "$OUT" in
     *.gz) echo "    $ZIP -dc $HERE/$OUT > /var/tmp/hld.depot" ;;
     *.Z)  echo "    /usr/bin/uncompress -c $HERE/$OUT > /var/tmp/hld.depot" ;;
     esac
-    echo "    swinstall -s /var/tmp/hld.depot HLD       # incl. the ld override"
+    echo "    swinstall -s /var/tmp/hld.depot HLD       # linker + source"
     echo "    swinstall -s /var/tmp/hld.depot HLD.RUN   # linker only"
     ;;
 *)
