@@ -34,7 +34,9 @@ REF=$1
 shift
 CUR=${CUR:-build/hld}
 RE=${RE:-build/hld-readelf}
-W=build/difflibs
+# Overridable so two runs can proceed without one erasing the other's
+# artefacts -- the whole point of keeping them is to inspect them afterwards.
+W=${W:-build/difflibs}
 
 [ -x "$REF" ] || { echo "no reference linker at $REF"; exit 2; }
 [ -x "$CUR" ] || { echo "build first: make"; exit 2; }
@@ -53,22 +55,36 @@ mkdir -p $W/ref $W/cur || exit 1
 FAIL=0
 NJOB=0
 
-# Which section holds this file offset? Sections are listed with hex offset
-# and size; HP's awk has no strtonum, so the arithmetic is done by the shell.
-# Takes cmp's 1-BASED offset and converts here: doing it at the call site
-# would nest command substitutions, which the older shells mis-parse.
-section_at() {
-    _want=`expr $2 - 1`
+# Build a decimal section table ONCE per library: "start end name", skipping
+# NOBITS. Doing the hex conversion and the lookup per differing byte instead
+# re-parses several thousand section headers each time -- on a real 31 MB
+# libstdc++ with ~9600 sections that turns a second of work into many minutes,
+# which is precisely the case this tool exists for.
+#
+# A NOBITS section occupies NO file space but still carries a nominal
+# sh_offset, usually the same one as whatever really holds those bytes.
+# Matching it invents findings: .sbss and .comment share an offset, and a
+# version-stamp byte got reported as a change to .sbss.
+sectab() {
     $RE -S "$1" 2>/dev/null |
       sed 's/^ *\[ *[0-9]*\] *//' |
       while read nm ty addr off sz rest; do
+        [ "$ty" = NOBITS ] && continue
         case "$off$sz" in *[!0-9a-fA-F]*|"") continue ;; esac
         o=$((0x$off)); s=$((0x$sz))
-        if [ "$_want" -ge "$o" ] && [ "$_want" -lt $((o + s)) ]; then
-            echo "$nm"
-            return
-        fi
-      done
+        [ "$s" -gt 0 ] || continue
+        echo "$o $((o + s)) $nm"
+      done > "$2"
+}
+
+# Attribute every offset in one pass against that table. cmp reports 1-based
+# offsets; the table is 0-based.
+attribute() {
+    awk 'NR==FNR { lo[NR]=$1; hi[NR]=$2; nm[NR]=$3; n=NR; next }
+         { off = $1 - 1
+           for (i = 1; i <= n; i++)
+               if (off >= lo[i] && off < hi[i]) { print nm[i]; break } }' \
+        "$1" -
 }
 
 for src in "$@"; do
@@ -108,10 +124,9 @@ for src in "$@"; do
     # Attribute the differing bytes. Only the first few hundred are located --
     # enough to name the sections involved without walking a 30 MB library.
     ndiff=`cmp -l $W/ref/$name.so $W/cur/$name.so 2>/dev/null | wc -l | tr -d ' '`
+    sectab $W/ref/$name.so $W/$name.sections
     secs=`cmp -l $W/ref/$name.so $W/cur/$name.so 2>/dev/null | head -400 |
-          while read off a b; do
-              section_at $W/ref/$name.so $off
-          done | sort -u | tr '\n' ' '`
+          attribute $W/$name.sections | sort -u | tr '\n' ' '`
     [ -n "$secs" ] || secs="(outside every section — headers or padding)"
     echo "  $name: $ndiff differing bytes, in: $secs"
     case "$secs" in
