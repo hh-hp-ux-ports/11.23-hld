@@ -34,17 +34,43 @@ fi
 if [ -z "$XAS" ] && [ -x /opt/binutils/bin/as ] && [ "`uname -s`" = "HP-UX" ]; then
     XAS=/opt/binutils/bin/as
 fi
+# Without an ia64 assembler, fall back to the objects committed under
+# tests/obj — assembled from the very tests/asm sources beside them, so the
+# linker is still being tested against real input. That keeps most of this
+# suite running on a plain development host, where it used to skip whole.
+# The assembler, when present, wins: the sources are the definition and the
+# committed objects only stand in for them.
+#
+# Regenerate after changing anything in tests/asm:
+#   for f in exit42 exit_stub multi_a multi_b gp_a gp_b far_a far_b; do
+#       ia64-hp-hpux11.23-as -mlp64 -o tests/obj/$f.o tests/asm/$f.s
+#   done
+PREBUILT=
 if [ -z "$XAS" ] || [ ! -x "$XAS" ]; then
-    echo "SKIP: no ia64 gas found (link tests need one; see tests/local.conf.example)"
-    exit 0
+    if [ -f tests/obj/exit42.o ]; then
+        PREBUILT=1
+        echo "note: no ia64 assembler — using the prebuilt objects in tests/obj"
+    else
+        echo "SKIP: no ia64 gas found (link tests need one; see tests/local.conf.example)"
+        exit 0
+    fi
 fi
+
+# Assemble it, or take the committed copy.
+getobj() {
+    CHECKS=`expr $CHECKS + 1`
+    if [ -n "$PREBUILT" ]; then
+        if cp tests/obj/$1.o $W/$1.o 2> $W/as.err; then :; else
+            echo "FAIL: tests/obj/$1.o is missing:"; cat $W/as.err; exit 1
+        fi
+    elif $XAS -mlp64 -o $W/$1.o tests/asm/$1.s 2> $W/as.err; then :; else
+        echo "FAIL: assembling tests/asm/$1.s:"; cat $W/as.err; exit 1
+    fi
+}
 
 mkdir -p $W
 for f in exit42 exit_stub multi_a multi_b gp_a gp_b; do
-    CHECKS=`expr $CHECKS + 1`
-    if $XAS -mlp64 -o $W/$f.o tests/asm/$f.s 2> $W/as.err; then :; else
-        echo "FAIL: assembling tests/asm/$f.s:"; cat $W/as.err; exit 1
-    fi
+    getobj $f
 done
 
 CHECKS=`expr $CHECKS + 1`
@@ -124,6 +150,11 @@ fi
 # stub set oscillate once: the search looked only in the island that was
 # nearest at that moment, and inserting a stub moves what is nearest, so
 # each pass failed to find the previous pass's stub and added another.
+# The remaining fixtures are 20 MB of generated filler, far too large to
+# commit, so these two checks need a real assembler and are skipped without
+# one. They are the long-branch tests -- the reason this linker exists -- so
+# a run that skips them is not a full run, and says so at the end.
+if [ -z "$PREBUILT" ]; then
 CHECKS=`expr $CHECKS + 1`
 printf '\t.text\n\t.global inner_target\ninner_target:\n\tmov r8 = 42\n\tbr.ret.sptk.many b0\n\t.skip 0x1400000\n\t.global inner_caller\ninner_caller:\n\talloc r32 = ar.pfs, 0, 2, 0, 0\n\tmov r33 = b0\n\tbr.call.sptk.many b0 = inner_target\n\tmov b0 = r33\n\tmov ar.pfs = r32\n\tbr.ret.sptk.many b0\n' > $W/inner.s
 if $XAS -mlp64 -o $W/inner.o $W/inner.s 2> $W/as.err; then :; else
@@ -148,9 +179,7 @@ fi
 CHECKS=`expr $CHECKS + 1`
 printf '\t.text\n\t.skip 0x1400000\n' > $W/far_pad.s
 for f in far_a far_b; do
-    if $XAS -mlp64 -o $W/$f.o tests/asm/$f.s 2> $W/as.err; then :; else
-        echo "FAIL: assembling tests/asm/$f.s:"; cat $W/as.err; exit 1
-    fi
+    getobj $f
 done
 if $XAS -mlp64 -o $W/far_pad.o $W/far_pad.s 2> $W/as.err; then :; else
     echo "FAIL: assembling the filler:"; cat $W/as.err; exit 1
@@ -173,10 +202,38 @@ if [ -f $W/farcall ]; then
         FAIL=1
     fi
 fi
+fi   # end of the assembler-only long-branch section
+
+# --- the same input twice must give the same bytes -------------------------
+# Linking is a pure function of its inputs, and nothing else here says so.
+# .dynsym and .symtab are emitted by walking symbol hash tables, so an
+# ordering that ever depended on allocation addresses would vary run to run
+# and every byte-comparison used as evidence in this project -- the release
+# differentials, the bootstrap -- would quietly stop meaning anything. Two
+# links, one cmp.
+CHECKS=`expr $CHECKS + 1`
+if $HLD -e _start -o $W/det_a $W/multi_a.o $W/multi_b.o $W/exit_stub.o \
+        2> $W/det.err &&
+   $HLD -e _start -o $W/det_b $W/multi_a.o $W/multi_b.o $W/exit_stub.o \
+        2>> $W/det.err; then
+    CHECKS=`expr $CHECKS + 1`
+    if cmp -s $W/det_a $W/det_b; then :; else
+        echo "FAIL: linking the same objects twice gave different bytes —"
+        echo "      hld's output depends on something other than its input"
+        cmp -l $W/det_a $W/det_b 2>/dev/null | head -3 |
+            while read off a b; do echo "        offset $off: $a -> $b"; done
+        FAIL=1
+    fi
+else
+    echo "FAIL: the determinism link did not complete:"; cat $W/det.err
+    FAIL=1
+fi
 
 # On the target platform, run them: structure is only half the claim.
 if [ "`uname -s 2>/dev/null`" = "HP-UX" ] && [ "`uname -m 2>/dev/null`" = "ia64" ]; then
-    for t in exit42 multi gptest farcall innercall; do
+    progs="exit42 multi gptest"
+    [ -z "$PREBUILT" ] && progs="$progs farcall innercall"
+    for t in $progs; do
         CHECKS=`expr $CHECKS + 1`
         $W/$t
         rc=$?
@@ -190,6 +247,8 @@ else
     ran="(not run: needs HP-UX/ia64)"
 fi
 
+# A partial run must never read as a full one.
+[ -n "$PREBUILT" ] && ran="$ran; NO ASSEMBLER, so the long-branch tests were skipped"
 if [ $FAIL -eq 0 ]; then
     echo "OK: static link checks passed ($CHECKS checks) $ran"
 else

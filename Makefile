@@ -44,6 +44,20 @@ check: all
 	sh tests/check_archive.sh
 	sh tests/check_dynamic.sh
 
+# Three stages: hld linked by the system linker, then by itself, then by that.
+# The last two must come out byte-identical. Deliberately NOT part of `check':
+# it needs HP-UX and a second linker to start from, and it proves determinism
+# rather than correctness — hld is an executable, so it exercises none of the
+# shared-library output where this linker's real defects have been.
+bootstrap: all
+	sh scripts/bootstrap.sh
+
+# Relink real libraries with a previous release and account for every byte
+# that differs. Needs a reference linker and real inputs, so it takes
+# arguments and is not a `check' target:
+#   sh scripts/difflibs.sh /opt/hld/bin/hld <objdir|archive> [...]
+# This is where the defects have actually been — see the script's header.
+
 # An SD depot for swinstall. Must be built on HP-UX (swpackage lives there);
 # works as an ordinary user. Ships the binaries, an `ld` alias that takes
 # precedence over the system linker on PATH, and the corresponding source.
