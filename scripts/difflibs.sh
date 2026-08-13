@@ -121,12 +121,43 @@ for src in "$@"; do
         continue
     fi
 
-    # Attribute the differing bytes. Only the first few hundred are located --
-    # enough to name the sections involved without walking a 30 MB library.
-    ndiff=`cmp -l $W/ref/$name.so $W/cur/$name.so 2>/dev/null | wc -l | tr -d ' '`
+    #
+    # Size first. When the two images are different LENGTHS every byte after
+    # the first insertion shifts, so a byte-wise diff reports a sea of
+    # differences and locating "the first 400" just names whatever section
+    # follows the insertion -- on libstdc++ that was .IA_64.unwind_info, which
+    # had nothing to do with the change. Compare what is countable instead.
+    #
+    zr=`wc -c < $W/ref/$name.so | tr -d ' '`
+    zc=`wc -c < $W/cur/$name.so | tr -d ' '`
+    if [ "$zr" -ne "$zc" ]; then
+        echo "  $name: SIZE CHANGED $zr -> $zc (`expr $zc - $zr` bytes)"
+        echo "      byte offsets are not comparable across a size change;"
+        echo "      dynamic relocations, by type:"
+        for t in ref cur; do
+            $RE -r $W/$t/$name.so 2>/dev/null | grep R_IA64 |
+              awk '{print $3}' | sort | uniq -c | sort -rn |
+              awk -v s=$t '{printf "        %-4s %6d %s\n", s, $1, $2}'
+        done
+        FAIL=1
+        continue
+    fi
+
+    #
+    # ONE capped pass. Two 31 MB libraries that differ widely make `cmp -l'
+    # emit millions of lines, and running it twice -- once to count, once to
+    # attribute -- was slower than the links themselves. head closes the pipe,
+    # so cmp stops at the cap instead of walking the rest of the file. The
+    # count is then a floor, and says so rather than pretending to be exact.
+    #
+    CAP=20000
+    cmp -l $W/ref/$name.so $W/cur/$name.so 2>/dev/null |
+        head -$CAP > $W/$name.diff
+    ndiff=`wc -l < $W/$name.diff | tr -d ' '`
+    [ "$ndiff" -ge $CAP ] && ndiff="$CAP+ (capped)"
     sectab $W/ref/$name.so $W/$name.sections
-    secs=`cmp -l $W/ref/$name.so $W/cur/$name.so 2>/dev/null | head -400 |
-          attribute $W/$name.sections | sort -u | tr '\n' ' '`
+    secs=`head -400 $W/$name.diff | attribute $W/$name.sections |
+          sort -u | tr '\n' ' '`
     [ -n "$secs" ] || secs="(outside every section — headers or padding)"
     echo "  $name: $ndiff differing bytes, in: $secs"
     case "$secs" in
