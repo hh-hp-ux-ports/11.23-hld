@@ -204,6 +204,107 @@ if [ -f $W/farcall ]; then
 fi
 fi   # end of the assembler-only long-branch section
 
+# --- symbol-resolution rules, from GNU ld's testsuite ----------------------
+# These are the cases ld-elfweak, ld-elfcomm, ld-undefined and ld-linkonce
+# cover. They are ordinary ELF semantics rather than anything GNU-specific,
+# every other linker on the platform obeys them, and nothing here tested any
+# of them. The fixtures are written fresh for hld; only the behaviours are
+# taken from that suite.
+for f in sym_weak sym_strong com_small com_big lo_a lo_b weakundef; do
+    getobj $f
+done
+
+# A strong definition beats a weak one, in EITHER order, and the value that
+# survives is the strong one — resolving to the right symbol but the wrong
+# storage is a distinction a symbol table alone will not show.
+for ord in "$W/sym_weak.o $W/sym_strong.o" "$W/sym_strong.o $W/sym_weak.o"; do
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -shared -o $W/ws.so $ord 2> $W/ws.err; then
+        CHECKS=`expr $CHECKS + 1`
+        bind=`$RE -s $W/ws.so 2>/dev/null | awk '/ val$/{print $5; exit}'`
+        vaddr=`$RE -s $W/ws.so 2>/dev/null | awk '/ val$/{print $2; exit}'`
+        doff=`$RE -S $W/ws.so 2>/dev/null | awk '/ \.data /{print $6; exit}'`
+        if [ "$bind" != GLOBAL ]; then
+            echo "FAIL: val stayed $bind with a strong definition present"
+            FAIL=1
+        fi
+        # val's offset within .data, then the eight big-endian bytes there.
+        vlow=`echo $vaddr | sed 's/^6000000000000//'`
+        skip=`expr $((0x$doff)) + $((0x$vlow))`
+        got=`dd if=$W/ws.so bs=1 skip=$skip count=8 2>/dev/null |
+             od -An -tx1 | tr -d ' \n'`
+        if [ "$got" = 000000000000002a ]; then :; else
+            echo "FAIL: the weak definition won — val holds 0x$got, want 42"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: linking a weak and a strong definition:"; cat $W/ws.err
+        FAIL=1
+    fi
+done
+
+# Two commons of the same name and different sizes: the largest wins.
+CHECKS=`expr $CHECKS + 1`
+if $HLD -shared -o $W/com.so $W/com_small.o $W/com_big.o 2> $W/com.err; then
+    CHECKS=`expr $CHECKS + 1`
+    csz=`$RE -s $W/com.so 2>/dev/null | awk '/ cval$/{print $3; exit}'`
+    if [ "$csz" = 64 ]; then :; else
+        echo "FAIL: common cval came out $csz bytes, want the larger 64"
+        FAIL=1
+    fi
+else
+    echo "FAIL: linking two commons of different sizes:"; cat $W/com.err
+    FAIL=1
+fi
+
+# A weak reference nothing defines is not an error; it resolves to zero.
+CHECKS=`expr $CHECKS + 1`
+if $HLD -shared -o $W/wu.so $W/weakundef.o 2> $W/wu.err; then :; else
+    echo "FAIL: a weak undefined symbol was treated as an error:"
+    cat $W/wu.err
+    FAIL=1
+fi
+
+# Two strong definitions of one symbol must be refused, and refused with a
+# non-zero status — a diagnostic on stderr that still exits 0 is worse than
+# silence, because every caller believes the link succeeded.
+CHECKS=`expr $CHECKS + 1`
+cp $W/sym_strong.o $W/sym_strong2.o
+if $HLD -shared -o $W/dup.so $W/sym_strong.o $W/sym_strong2.o \
+        > $W/dup.out 2>&1; then
+    echo "FAIL: two strong definitions of val linked without error"
+    FAIL=1
+else
+    CHECKS=`expr $CHECKS + 1`
+    if grep "duplicate definition" $W/dup.out > /dev/null 2>&1; then :; else
+        echo "FAIL: duplicate definition was refused, but not clearly:"
+        cat $W/dup.out
+        FAIL=1
+    fi
+fi
+
+# The same .gnu.linkonce section in two objects. What must hold is that ONE
+# definition is used and it is correct.
+# ⚠️ hld does NOT discard the duplicate section the way GNU ld does — both
+# copies are concatenated into the output, so the dead one costs space and,
+# since 0.12.3, dynamic relocations for its descriptors too. A relinked
+# libstdc++ carries 7298 of these sections. That is bloat rather than
+# breakage, so this asserts the contract and not the byte count; if the
+# duplicates are ever discarded, only the size assertion below needs adding.
+CHECKS=`expr $CHECKS + 1`
+if $HLD -shared -o $W/lo.so $W/lo_a.o $W/lo_b.o 2> $W/lo.err; then
+    CHECKS=`expr $CHECKS + 1`
+    ndef=`$RE -s $W/lo.so 2>/dev/null | grep -c " dupsym$"`
+    if [ "$ndef" -lt 1 ]; then
+        echo "FAIL: dupsym did not survive a duplicated linkonce section"
+        FAIL=1
+    fi
+else
+    echo "FAIL: two objects with the same .gnu.linkonce section:"
+    cat $W/lo.err
+    FAIL=1
+fi
+
 # --- the same input twice must give the same bytes -------------------------
 # Linking is a pure function of its inputs, and nothing else here says so.
 # .dynsym and .symtab are emitted by walking symbol hash tables, so an
