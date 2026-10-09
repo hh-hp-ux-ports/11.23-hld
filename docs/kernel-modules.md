@@ -25,8 +25,8 @@ ld -r -o module x.o wrapper.o modmeta.o shtmod.o
 patch_shtmod.py module                   # .shtmod -> SHT_MOD; not needed with hld -r
 ```
 
-With hld the link step is `hld -r --kernel-module -o module ...`, and the
-patch step goes away.
+With hld the link step can be `hld -r --kernel-module -o module ...`, and the
+patch step goes away (plain `hld -r` keeps HP's PROGBITS `.shtmod`).
 
 ## What HP ld -r does (measured)
 
@@ -84,7 +84,9 @@ combined by HP ld -r and the output read back:
   The error reads `Mismatched NOFUNCDESC_CONS_GP. Expected Undefined, which
   was set by the file: pa.o, but found EF_IA_64_NOFUNCDESC_CONS_GP in the
   file: pb_nfd.o.` -- the first input sets the expectation. Only the first
-  mismatching bit is reported.
+  mismatching bit is reported. CONS_GP is not part of the must-match test:
+  0x98 + 0xd8 and 0x18 + 0x58 both link (to 0xd8 and 0x58); 0x198 + 0x158
+  fails only because 0x80 differs.
 - **Archives** are searched (`-l` and a named `.a` both work); **-o**
   defaults to `a.out`; a **duplicate strong global** is an error; an input
   `.shtmod` already of type SHT_MOD is **accepted and kept** (so the
@@ -111,12 +113,21 @@ Relocation types in the loadable modules, all of them: `IMM64`, `DIR64MSB`,
 `SEGREL64MSB`, `SECREL32MSB`, `SECREL64MSB` (debug), `PCREL21BI`, `TPREL22`
 (against kernel symbols). Never `PCREL21B`, `GPREL*`, `LTOFF*`, `FPTR*`.
 
-**Inferred**: the module loader handles exactly what HP's kernel compiler
-mode emits. A module has no gp and no linkage table of its own, so
-gp-relative and linkage-table relocations cannot be applied, and millicode
-is not exported to modules. The statically linked modules use both freely
-because the kernel link resolves them. `kcmodule` refusing such a module
-was reported by hp-ux-driver-development; it has not been re-tested here.
+What the loader itself accepts was read statically out of 11.23's
+`/stand/vmunix` by the parallel gcc-for-modules work (its REPORT.md, same
+day): `mod_obj_relone` dispatches NONE, IMM14/22/64, DIR32/64, GPREL64I,
+GPREL32/64, LTOFF64I, PCREL60B, PCREL21B/BI/M/F, PCREL22, PCREL32/64,
+PCREL64I, LTOFF_FPTR64I/32/64, SEGREL32/64, SECREL32/64, LTV32/64, LDXMOV,
+TPREL22 and TPREL64 to handlers -- **PCREL21B to the same one as
+PCREL21BI** -- and everything else, notably **GPREL22, LTOFF22, LTOFF22X,
+LTOFF_FPTR22, FPTR64 and PLTOFF**, to "MOD: mod_obj_doreloc: Can't process
+reloc type %d" (GPREL22's known refusal is the positive control). Millicode
+(`__milli_divI`, `__milli_div32U`) is a *local* symbol in the kernel, so a
+module cannot bind it ("Undefined symbol %s in loadable module %s"). The
+statically linked modules use both freely because the kernel link resolves
+them. Other loader diagnostics in the kernel's strings: "Reloc for
+non-default symtab", "Sh_info out of range", "Cannot allocate space for
+COMMON symbols" (COMMON is supported).
 
 Two things the census also shows:
 
@@ -126,18 +137,19 @@ Two things the census also shows:
   such variables past 8 bytes for this reason; `--kernel-module` catches
   the mistake.
 - HP cc **without** the kernel option emits `LTOFF22X`/`LDXMOV` and
-  `PCREL21B` (the never-built `kcskel` skeleton); with it, `PCREL21BI` and
-  `IMM64`. gcc emits `PCREL21B` for calls; whether the loader accepts it is
-  **unknown** (no loadable module has one).
+  `PCREL21B` (the never-loaded `kcskel` skeleton); with it, `PCREL21BI` and
+  `IMM64`. gcc emits `PCREL21B` for calls: no shipped module has one, but
+  the loader's dispatch treats it as PCREL21BI (static reading, not loaded).
 
 ## hld -r
 
 `hld -r` implements the behaviour above (`src/relocatable.c`), with these
-differences from HP ld -r, all deliberate:
+differences from HP ld -r, all deliberate. `-r` alone does what HP ld -r
+does, `.shtmod` included; `--kernel-module` (hld only) is the module mode.
 
 | | HP ld -r | hld -r | why harmless |
 |---|---|---|---|
-| `.shtmod` type | PROGBITS (as assembled) | **SHT_MOD (0x60000001)** | it is the type the loader demands; the patch script becomes a no-op |
+| `.shtmod` type | PROGBITS as assembled (an SHT_MOD input is kept) | the same with `-r`; **SHT_MOD (0x60000001) with `--kernel-module`** | it is the type the loader demands; `patch_shtmod.py` becomes a no-op |
 | `.note` | inputs + HP linker footprint | inputs only | not loaded; hld does not fabricate HP's footprint |
 | `.comment` | inputs only | inputs + hld's `what` stamp | not loaded; says which linker built it |
 | relocation sections | `sh_addralign` 4, file offset 4-aligned | 8, 8-aligned | stricter alignment for 8-byte fields; the content is the same |
@@ -145,12 +157,13 @@ differences from HP ld -r, all deliberate:
 | symbol order | locals as HP; globals in HP's hash order | locals as HP; globals first seen | consumers look symbols up by name or index from the relocations |
 | output on error | written, exit 1 | not written, exit 1 | |
 
-`--kernel-module` (hld only) additionally refuses, after an otherwise
-successful `-r`: a `GPREL*`, `LTOFF*`, `PLTOFF*` or `LTOFF_FPTR*`
-relocation; an undefined `__milli*`; no `.shtmod`; a `.shtmod` without its
-wrapper pointer (DIR64MSB at offset 16); no `.data.KC_META` /
-`.data.KC_META_PTR`. It warns for relocation types outside the loadable
-census above, and for inputs without NOFUNCDESC_CONS_GP.
+`--kernel-module` (hld only) emits `.shtmod` as SHT_MOD and refuses, after an
+otherwise successful `-r`: a relocation type the loader's dispatch does not
+process (list above); an undefined `__milli*`; no `.shtmod`; a `.shtmod`
+without its wrapper pointer (DIR64MSB at offset 16); no `.data.KC_META` /
+`.data.KC_META_PTR`. It warns for a type the dispatch accepts but no shipped
+loadable module uses (GPREL64I, LTOFF64I, ... -- gp- or linkage-table-relative
+in a module that has neither), and for inputs without NOFUNCDESC_CONS_GP.
 
 ### Compared with HP ld -r on real modules
 
@@ -163,7 +176,7 @@ contents, relocations, symbols, flags -- by name, not index). Inputs built on
 
 | difference | class |
 |---|---|
-| `.shtmod`: type PROGBITS (HP) vs SHT_MOD (hld) | harmless -- intended; matches what `patch_shtmod.py` makes of HP's output |
+| `.shtmod`: type PROGBITS (HP) vs SHT_MOD (hld `--kernel-module`; plain `-r` matches HP) | harmless -- intended; it is what `patch_shtmod.py` makes of HP's output |
 | `.note`: 0x8e0 (HP) vs 0x838 bytes | harmless -- HP's 0xa8-byte linker footprint; the inputs' notes are identical |
 | `.comment`: only in hld's | harmless -- hld's version stamp, not loaded |
 
@@ -171,6 +184,20 @@ Nothing else differs: e_flags (0x198), all 14 other sections' type, flags,
 size, alignment, entsize, links and contents; all 240 relocations (type,
 offset, target, addend); all 16 globals and 15 locals. `--kernel-module`
 accepts it without a warning.
+
+**gvtape built with gcc 4.7.4 and GNU as** (the recipe being tried in
+parallel: `-mno-pic -mno-sdata -Wa,--mauto-pic`, `.shtmod` in GNU syntax,
+a private `kmod_memcpy`; every input e_flags 0x98, i.e. NOFUNCDESC_CONS_GP
+without ABSOLUTE): the same `.shtmod` and `.note` differences, and `.comment`
+differs in more than the stamp -- HP's linker clears the inputs' `SHF_MERGE |
+SHF_STRINGS` and entsize 1, hld keeps them (harmless: still a run of
+strings, not loaded). All relocations and symbols agree. `--kernel-module`
+accepts it (56 `PCREL21B` calls). Output e_flags 0x98 from both linkers --
+neither invents the ABSOLUTE bit gcc's objects lack.
+
+**The same, with HP as's `.shtmod`** (`kmod-gcc/g3`, the parallel work's
+final build; e_flags 0x98 + 0x198 -> 0x198 from both linkers, ABSOLUTE or'ed):
+the `.shtmod` type with `--kernel-module`, `.note`, `.comment`; nothing else.
 
 **kcskel** (hp-ux-driver-development's skeleton, built as its own script
 does, *without* the kernel code model): the same `.note` and `.comment`
@@ -188,10 +215,12 @@ Neither output has been loaded by a kernel; see "Open" below.
   gvtape smoke test (`kcmodule -B gvtape=loaded`, `lsdev`, `dd`/`mt`
   through `/dev/rmt/gvt0m*`, unload). Expected differences visible to the
   loader: none besides the `.note`/`.comment` sizes.
-- **`PCREL21B` in a module** (gcc's call form): absent from every loadable
-  module, so unproven. If the loader refuses it, hld -r could rewrite it to
-  `PCREL21BI` (same instruction field) for `--kernel-module`; that needs a
-  load test first.
+- **`PCREL21B` in a module** (gcc's call form): absent from every shipped
+  loadable module; the loader's dispatch sends it to PCREL21BI's handler
+  (static reading). A gcc-built module's load test settles it.
+- **Should plain `-r` emit SHT_MOD for `.shtmod` too?** hld does it only
+  under `--kernel-module`, so that `-r` alone is HP ld -r. A decision for
+  the project owner.
 - **11.31.** Not measured: its modules are 0x1b8 too, and its `.HP.opt_annot`
   may carry an `sh_info`, which hld -r refuses rather than carries.
 - **SHT_GROUP / COMDAT** inputs are refused by `-r` (C kernel code has none).

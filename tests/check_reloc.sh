@@ -96,9 +96,10 @@ else
 fi
 
 # --- a kernel module --------------------------------------------------------
-# The only difference HP's linker leaves is the one hld removes on purpose:
-# .shtmod comes out as SHT_MOD (0x60000001), the type the module loader
-# demands, instead of PROGBITS. Nothing else may differ.
+# Plain -r: exactly what HP ld -r makes, .shtmod still PROGBITS.
+same_as_hp tkm_plain r_tkm.o $F/tkm_body.o $F/tkm_meta.o $F/tkm_shtmod.o
+# --kernel-module: the one difference is the one asked for -- .shtmod comes
+# out as SHT_MOD (0x60000001), the type the module loader demands.
 CHECKS=`expr $CHECKS + 1`
 if $HLD -r --kernel-module -o $W/tkm.o $F/tkm_body.o $F/tkm_meta.o \
         $F/tkm_shtmod.o > $W/tkm.err 2>&1; then :; else
@@ -116,7 +117,7 @@ if grep "warning" $W/tkm.err > /dev/null; then
     fail "tkm: a module built as HP builds one drew a warning:"; cat $W/tkm.err
 fi
 # HP's linker keeps an SHT_MOD input as it is (measured), so a module can be
-# fed back in; and doing so changes nothing but the version stamp.
+# fed back in, even by plain -r; and doing so changes nothing but the stamp.
 CHECKS=`expr $CHECKS + 1`
 if $HLD -r -o $W/tkm2.o $W/tkm.o > $W/tkm2.err 2>&1; then
     if $CMP -x .comment $W/tkm.o $W/tkm2.o > $W/tkm2.cmp 2>&1; then :; else

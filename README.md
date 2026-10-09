@@ -114,8 +114,8 @@ Working today:
   set breakpoints by source line and walk a stack.
 - Relocatable output (`-r`), the form of an HP-UX kernel module: the same contract as
   HP's `ld -r` for the same inputs, checked section by section, relocation by
-  relocation (`hld-objcmp`), and `.shtmod` emitted as the SHT_MOD the module loader
-  wants. `--kernel-module` refuses what a loadable module cannot carry. See
+  relocation (`hld-objcmp`). `--kernel-module` emits `.shtmod` as the SHT_MOD the
+  module loader wants and refuses what a loadable module cannot carry. See
   `docs/kernel-modules.md`.
 
 **It links gcc 9.5's compilers** — `cc1`, `cc1plus` and `lto1`, each from several hundred

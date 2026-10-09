@@ -457,15 +457,56 @@ typedef struct {
 } symmap;
 
 /*
- * The relocation types a loadable module may carry, and those it may not.
+ * The relocation types a loadable module may carry.
  *
- * MEASURED: every relocation type in the 20 loadable modules (those with a
- * .shtmod) under /usr/conf/mod on 11.23 is one of `seen' below. INFERRED:
- * the module loader refuses the gp-relative and linkage-table forms -- a
- * module has no gp or linkage table of its own -- which is consistent with
- * the census: HP's statically linked modules (no .shtmod) use GPREL22 and
- * call millicode, and not one loadable module does either.
+ * kmod_accepted: the types the 11.23 module loader's relocation dispatch
+ * (mod_obj_relone in /stand/vmunix) sends to a handler; anything else takes
+ * its error path, "MOD: mod_obj_doreloc: Can't process reloc type %d".
+ * Read statically from the kernel by the parallel gcc-for-modules work
+ * (2026-10-09), with GPREL22's known refusal as the positive control. Note
+ * that GPREL22, LTOFF22, LTOFF22X, LTOFF_FPTR22, FPTR64 and PLTOFF are NOT
+ * accepted -- exactly what a compiler emits for short data, the linkage
+ * table and function descriptors, none of which a module has.
+ *
+ * kmod_seen: every type found in the 20 loadable modules (those with a
+ * .shtmod) under /usr/conf/mod on 11.23. A type the dispatch accepts but no
+ * shipped module uses is let through with a warning; PCREL21B, gcc's call,
+ * is not warned about: the dispatch sends it to the same handler as HP's
+ * PCREL21BI.
  */
+static int kmod_accepted(uint32_t t)
+{
+    switch (t) {
+    case R_IA64_NONE:
+    case R_IA64_IMM14: case R_IA64_IMM22: case R_IA64_IMM64:
+    case R_IA64_DIR32MSB: case R_IA64_DIR32LSB:
+    case R_IA64_DIR64MSB: case R_IA64_DIR64LSB:
+    case R_IA64_GPREL64I:
+    case R_IA64_GPREL32MSB: case R_IA64_GPREL32LSB:
+    case R_IA64_GPREL64MSB: case R_IA64_GPREL64LSB:
+    case R_IA64_LTOFF64I:
+    case R_IA64_PCREL60B: case R_IA64_PCREL21B:
+    case R_IA64_PCREL21M: case R_IA64_PCREL21F:
+    case R_IA64_PCREL32MSB: case R_IA64_PCREL32LSB:
+    case R_IA64_PCREL64MSB: case R_IA64_PCREL64LSB:
+    case R_IA64_LTOFF_FPTR64I:
+    case R_IA64_LTOFF_FPTR32MSB: case R_IA64_LTOFF_FPTR32LSB:
+    case R_IA64_LTOFF_FPTR64MSB: case R_IA64_LTOFF_FPTR64LSB:
+    case R_IA64_SEGREL32MSB: case R_IA64_SEGREL32LSB:
+    case R_IA64_SEGREL64MSB: case R_IA64_SEGREL64LSB:
+    case R_IA64_SECREL32MSB: case R_IA64_SECREL32LSB:
+    case R_IA64_SECREL64MSB: case R_IA64_SECREL64LSB:
+    case R_IA64_LTV32MSB: case R_IA64_LTV32LSB:
+    case R_IA64_LTV64MSB: case R_IA64_LTV64LSB:
+    case R_IA64_PCREL21BI: case R_IA64_PCREL22: case R_IA64_PCREL64I:
+    case R_IA64_LDXMOV:
+    case R_IA64_TPREL22: case R_IA64_TPREL64MSB: case R_IA64_TPREL64LSB:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static int kmod_seen(uint32_t t)
 {
     switch (t) {
@@ -475,28 +516,8 @@ static int kmod_seen(uint32_t t)
     case R_IA64_SECREL32MSB:
     case R_IA64_SECREL64MSB:
     case R_IA64_PCREL21BI:
+    case R_IA64_PCREL21B:       /* same handler as PCREL21BI, see above */
     case R_IA64_TPREL22:
-        return 1;
-    default:
-        return 0;
-    }
-}
-
-static int kmod_refused(uint32_t t)
-{
-    switch (t) {
-    case R_IA64_GPREL22: case R_IA64_GPREL64I:
-    case R_IA64_GPREL32MSB: case R_IA64_GPREL32LSB:
-    case R_IA64_GPREL64MSB: case R_IA64_GPREL64LSB:
-    case R_IA64_LTOFF22: case R_IA64_LTOFF64I:
-    case R_IA64_LTOFF22X: case R_IA64_LDXMOV:
-    case R_IA64_PLTOFF22: case R_IA64_PLTOFF64I:
-    case R_IA64_PLTOFF64MSB: case R_IA64_PLTOFF64LSB:
-    case R_IA64_LTOFF_FPTR22: case R_IA64_LTOFF_FPTR64I:
-    case R_IA64_LTOFF_FPTR32MSB: case R_IA64_LTOFF_FPTR32LSB:
-    case R_IA64_LTOFF_FPTR64MSB: case R_IA64_LTOFF_FPTR64LSB:
-    case R_IA64_LTOFF_TPREL22: case R_IA64_LTOFF_DTPMOD22:
-    case R_IA64_LTOFF_DTPREL22:
         return 1;
     default:
         return 0;
@@ -516,7 +537,7 @@ static void kmod_note(kmod_tally *k, uint32_t type, const osec *o,
 
     snprintf(buf, sizeof buf, "%s%s in %s against `%s'",
              tn ? tn : "type ", tn ? "" : "?", o->name, sym);
-    if (kmod_refused(type)) {
+    if (!kmod_accepted(type)) {
         if (!k->refused++) memcpy(k->first_refused, buf, sizeof buf);
     } else if (!kmod_seen(type)) {
         if (!k->unseen++) memcpy(k->first_unseen, buf, sizeof buf);
@@ -1001,12 +1022,14 @@ int hld_write_rel(hld_link *L)
         if (o->type != SHT_NOBITS && o->size)
             memcpy(img + o->off, o->data, (size_t)o->size);
         /*
-         * hld's one deliberate departure from HP ld -r: .shtmod comes out
-         * as SHT_MOD, the type the module loader demands. The assembler
-         * can only make PROGBITS, HP's linker leaves it so, and a separate
-         * tool used to patch it afterwards.
+         * With --kernel-module, .shtmod comes out as SHT_MOD, the type the
+         * module loader demands ("Non-existent or invalid SHT_MOD section").
+         * The assembler can only make PROGBITS and HP ld -r leaves it so --
+         * a separate script patches it afterwards. Plain -r keeps HP's
+         * behaviour: an input already of type SHT_MOD stays SHT_MOD, a
+         * PROGBITS one stays PROGBITS.
          */
-        if (is_shtmod(o->name)) type = SHT_HP_MOD;
+        if (is_shtmod(o->name) && L->kmod_check) type = SHT_HP_MOD;
         if (type == SHT_IA_64_UNWIND) {
             flags |= SHF_LINK_ORDER;
             info = o->assoc ? o->assoc->shndx : 0;

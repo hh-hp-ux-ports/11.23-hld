@@ -74,7 +74,7 @@ details and the evidence are in `docs/kernel-modules.md`.
 | e_flags | REDUCEDFP (0x20) and NOFUNCDESC_CONS_GP (0x80) must match the first input, else the link fails (`Mismatched NOFUNCDESC_CONS_GP. Expected ..., which was set by the file: A, but found ... in the file: B.`); CONS_GP (0x40) and ABSOLUTE (0x100) are or'ed; the architecture byte (0xff000000) takes the highest value; every other bit is dropped |
 | duplicate strong definitions | an error (`Duplicate symbol "x" in files a.o and b.o`); same-named locals are fine |
 | `-b`, `-e`, `+h`, `+b`, `+e`, `-B symbolic`, `-m` | hld refuses them with `-r`: they describe a loadable image |
-| `--kernel-module` | hld only: also refuse what the module loader cannot load (see `docs/kernel-modules.md`) |
+| `--kernel-module` | hld only: emit `.shtmod` as SHT_MOD, and refuse what the module loader cannot load (see `docs/kernel-modules.md`) |
 
 HP's linker writes its output even when it reports an error (exit 1). hld
 writes nothing on failure; a caller checking the exit status cannot tell the
