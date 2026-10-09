@@ -247,6 +247,14 @@ neither invents the ABSOLUTE bit gcc's objects lack.
 final build; e_flags 0x98 + 0x198 -> 0x198 from both linkers, ABSOLUTE or'ed):
 the `.shtmod` type with `--kernel-module`, `.note`, `.comment`; nothing else.
 
+**The post-pass, replaced.** The gcc route links with HP ld -r and then runs
+two scripts: `kmod_eflags.py OUT 0x198` and `patch_shtmod.py OUT`. On the
+gcc-built gvtape above, HP ld -r followed by both scripts and
+`hld -r --kernel-module=11.23` alone agree on everything but `.note` and
+`.comment`. `--kernel-module=11.31` gives 0x1b8 and passes the FP check on
+every gvtape build (HP cc 11.23 objects included: they name no FR outside
+the set either).
+
 **kcskel** (hp-ux-driver-development's skeleton, built as its own script
 does, *without* the kernel code model): the same `.note` and `.comment`
 differences and nothing else. `--kernel-module` refuses it -- 8 `LTOFF22X`/
@@ -256,6 +264,9 @@ Neither output has been loaded by a kernel; see "Open" below.
 
 ## Open
 
+- **11.31 modes are measured on 11.23 only.** 0x1b8 and the f6-f11 rule
+  come from 11.23's shipped modules (all 0x1b8) and the parallel work's
+  11.31 notes; no 11.31 module has been linked with hld or compared.
 - **A real load.** The comparison proves hld -r's output says the same thing
   as HP's, which loads; it does not prove the loader agrees. The test: on a
   throwaway 11.23 guest, install hld's `gvtape` (built with
@@ -266,9 +277,16 @@ Neither output has been loaded by a kernel; see "Open" below.
 - **`PCREL21B` in a module** (gcc's call form): absent from every shipped
   loadable module; the loader's dispatch sends it to PCREL21BI's handler
   (static reading). A gcc-built module's load test settles it.
-- **Should plain `-r` emit SHT_MOD for `.shtmod` too?** hld does it only
-  under `--kernel-module`, so that `-r` alone is HP ld -r. A decision for
-  the project owner.
+- **Decisions for the project owner**, all currently resolved the
+  conservative way:
+  - should plain `-r` emit SHT_MOD for `.shtmod` too? Now only
+    `--kernel-module` does, so that `-r` alone is HP ld -r;
+  - the option's spelling, `--kernel-module[=11.23|11.31]` (GNU-style, so it
+    cannot collide with an HP `+` option); and whether a bare
+    `--kernel-module` should default to a release -- now it does not, and
+    keeps the inputs' flags combined as HP ld -r combines them;
+  - whether a 0x98 module (gcc, no ABSOLUTE) loads as it is: untested, so
+    the release modes write 0x198/0x1b8 as HP's compilers do.
 - **11.31.** Not measured: its modules are 0x1b8 too, and its `.HP.opt_annot`
   may carry an `sh_info`, which hld -r refuses rather than carries.
 - **SHT_GROUP / COMDAT** inputs are refused by `-r` (C kernel code has none).
