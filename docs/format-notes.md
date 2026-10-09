@@ -11,7 +11,7 @@ copied from documentation. Producer of record: HP ld B.12.34 fed by gcc 4.7.4 + 
 |---|---|
 | e_ident | `7f 45 4c 46 02 02 01 01 01` — ELF64, **2's-complement big-endian**, EV_CURRENT, OSABI **1 = HP-UX**, **ABIVERSION 1** |
 | e_machine | 50 (EM_IA_64) |
-| e_flags | `.o`: **0x18** = EF_IA_64_BE (0x8) \| EF_IA_64_ABI64 (0x10). HP-ld exec/DSO: **0x19** (adds 0x1 = TRAPNIL, the `-z` nulptr bit). dld.so itself: 0x18 |
+| e_flags | `.o`: **0x18** = EF_IA_64_BE (0x8) \| EF_IA_64_ABI64 (0x10). HP-ld exec/DSO: **0x19** (adds 0x1 = TRAPNIL, the `-z` nulptr bit). dld.so itself: 0x18. Kernel objects (HP cc `-Wc,-codeconvention,esnonreloc`): **0x198** (adds NOFUNCDESC_CONS_GP 0x80, ABSOLUTE 0x100); HP's own modules in `/usr/conf/mod`: **0x1b8** (also REDUCEDFP 0x20). How `ld -r` combines them: `kernel-modules.md` |
 | e_type | REL / EXEC / DYN as usual; **dld.so is ET_EXEC** with vaddr 0 text, 0x80000000 data |
 | e_phentsize/e_shentsize | 56 / 64 (standard ELF64) |
 

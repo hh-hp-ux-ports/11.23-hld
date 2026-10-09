@@ -55,3 +55,27 @@ contains `ld` → hld (collect2 honors -B for ld lookup), or `-Wl,` pass-through
 a spec file or a symlink swap makes it permanent. **Never replace the system
 `/usr/ccs/bin/ld`** on a machine relied on for other work — hld gets used via -B/specs
 until it earns trust, the same policy any prudent toolchain swap would follow.
+
+## Relocatable output (`-r`)
+
+How an HP-UX kernel module is linked: `ld -r -o mod a.o b.o meta.o shtmod.o`.
+Measured against HP ld -r (92453-07, footprint `B.12.42`) on 11.23; the
+details and the evidence are in `docs/kernel-modules.md`.
+
+| element | required behavior |
+|---|---|
+| `-r` | ET_REL output, every relocation kept; may appear anywhere on the line |
+| `-o file` | output; **default `a.out`** as for any link (measured) |
+| bare `.o` args | combined in command-line order |
+| archives, `-L`/`-l` | searched as in any link: a member is pulled in for an undefined reference (measured: `ld -r pa.o libpb.a` and `-L. -lpb` both pull `pb.o`) |
+| shared library input | refused -- a relocatable object has nowhere to record the dependency |
+| `-z` | sets TRAPNIL (0x1) in the output; **nothing else does** -- an input's TRAPNIL is not inherited (measured) |
+| `-u sym` | an undefined symbol in the output, and an archive search for it |
+| e_flags | REDUCEDFP (0x20) and NOFUNCDESC_CONS_GP (0x80) must match the first input, else the link fails (`Mismatched NOFUNCDESC_CONS_GP. Expected ..., which was set by the file: A, but found ... in the file: B.`); CONS_GP (0x40) and ABSOLUTE (0x100) are or'ed; the architecture byte (0xff000000) takes the highest value; every other bit is dropped |
+| duplicate strong definitions | an error (`Duplicate symbol "x" in files a.o and b.o`); same-named locals are fine |
+| `-b`, `-e`, `+h`, `+b`, `+e`, `-B symbolic`, `-m` | hld refuses them with `-r`: they describe a loadable image |
+| `--kernel-module` | hld only: also refuse what the module loader cannot load (see `docs/kernel-modules.md`) |
+
+HP's linker writes its output even when it reports an error (exit 1). hld
+writes nothing on failure; a caller checking the exit status cannot tell the
+difference.
