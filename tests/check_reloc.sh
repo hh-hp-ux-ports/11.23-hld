@@ -147,6 +147,38 @@ must_fail kmod_gprel "GPREL22" -r --kernel-module -o $W/x.o \
     $F/tkm_sdata.o $F/tkm_meta.o $F/tkm_shtmod.o
 must_fail kmod_milli "__milli" -r --kernel-module -o $W/x.o \
     $F/tkm_body.o $F/tkm_meta.o $F/tkm_shtmod.o $F/h2k.o
+# Each refusal names the object, the section and offset, the function and
+# the symbol -- on the guest the same module only gets "Relocation in
+# module ... failed". g1.o is ordinary gcc code: gp-relative short data, a
+# linkage-table load, a function descriptor.
+CHECKS=`expr $CHECKS + 1`
+$HLD -r --kernel-module -o $W/x.o $F/g1.o > $W/kmod_g1.err 2>&1
+for want in \
+    "g1.o: .text+0x1 (g1_entry+0x1): R_IA64_GPREL22 against \`.sbss'" \
+    "g1.o: .text+0x50 (g1_entry+0x50): R_IA64_LTOFF22X against \`ext_var'" \
+    "g1.o: .text+0x82 (g1_entry+0x82): R_IA64_GPREL22 against \`gdata'" \
+    "g1.o: .sdata+0x0: R_IA64_FPTR64MSB against \`g1_entry'" \
+    "5 relocation(s) the module loader does not process"; do
+    grep "$want" $W/kmod_g1.err > /dev/null \
+        || fail "kmod_g1: \`$want' not reported"
+done
+grep "LDXMOV" $W/kmod_g1.err > /dev/null \
+    && fail "kmod_g1: LDXMOV, which the loader processes, was refused"
+CHECKS=`expr $CHECKS + 1`
+$HLD -r --kernel-module -o $W/x.o $F/tkm_body.o $F/tkm_meta.o \
+    $F/tkm_shtmod.o $F/h2k.o > $W/kmod_h2k.err 2>&1
+for want in \
+    "h2k.o: .text+0x52 (ext_fn+0x52): call to millicode \`__milli_div32I'" \
+    "h2k.o: .text+0x32 (g2_long+0x32): call to millicode \`__milli_remI'"; do
+    grep "$want" $W/kmod_h2k.err > /dev/null \
+        || fail "kmod_h2k: \`$want' not reported"
+done
+CHECKS=`expr $CHECKS + 1`
+$HLD -r --kernel-module -o $W/x.o $F/tkm_sdata.o $F/tkm_meta.o \
+    $F/tkm_shtmod.o > $W/kmod_sdata.err 2>&1
+grep "tkm_sdata.o: .text+0x12 (tkm_load+0x12): R_IA64_GPREL22 against \`.sbss'" \
+    $W/kmod_sdata.err > /dev/null \
+    || { fail "kmod_sdata: the short-data access was not named:"; cat $W/kmod_sdata.err; }
 must_fail kmod_noshtmod "no \.shtmod" -r --kernel-module -o $W/x.o \
     $F/tkm_body.o $F/tkm_meta.o
 must_fail kmod_nometa "KC_META" -r --kernel-module -o $W/x.o \

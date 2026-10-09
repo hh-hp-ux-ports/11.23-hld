@@ -160,7 +160,11 @@ does, `.shtmod` included; `--kernel-module` (hld only) is the module mode.
 
 `--kernel-module` (hld only) emits `.shtmod` as SHT_MOD and refuses, after an
 otherwise successful `-r`: a relocation type the loader's dispatch does not
-process (list above); an undefined `__milli*`; no `.shtmod`; a `.shtmod`
+process (list above), and a call to `__milli*` -- each one named by object,
+input section, offset, enclosing function and symbol, e.g.
+`g1.o: .text+0x50 (g1_entry+0x50): R_IA64_LTOFF22X against `ext_var'+0`,
+where the guest would only say "Relocation in module ... failed" or
+"Undefined symbol"; no `.shtmod`; a `.shtmod`
 without its wrapper pointer (DIR64MSB at offset 16); no `.data.KC_META` /
 `.data.KC_META_PTR`. It warns for a type the dispatch accepts but no shipped
 loadable module uses (GPREL64I, LTOFF64I, ... -- gp- or linkage-table-relative

@@ -562,26 +562,6 @@ static int kmod_seen(uint32_t t)
     }
 }
 
-typedef struct {
-    unsigned long refused, unseen;
-    char first_refused[160], first_unseen[160];
-} kmod_tally;
-
-static void kmod_note(kmod_tally *k, uint32_t type, const osec *o,
-                      const char *sym)
-{
-    const char *tn = hld_reloc_name(type);
-    char buf[160];
-
-    snprintf(buf, sizeof buf, "%s%s in %s against `%s'",
-             tn ? tn : "type ", tn ? "" : "?", o->name, sym);
-    if (!kmod_accepted(type)) {
-        if (!k->refused++) memcpy(k->first_refused, buf, sizeof buf);
-    } else if (!kmod_seen(type)) {
-        if (!k->unseen++) memcpy(k->first_unseen, buf, sizeof buf);
-    }
-}
-
 /*
  * The function an offset in an input section belongs to, for a diagnostic
  * a person can act on: "in vt_claim+0x40" rather than ".text+0x1e2".
@@ -616,6 +596,54 @@ static const char *func_at(hld_elf *e, uint32_t shndx, uint64_t off,
     }
     *delta = off - bestv;
     return best ? buf : NULL;
+}
+
+typedef struct {
+    unsigned long refused, milli, unseen;
+    char first_unseen[160];
+} kmod_tally;
+
+/*
+ * One relocation, seen as the module loader will see it. What it cannot
+ * process is named in full -- object, section, offset, function, symbol --
+ * because the alternative is "Relocation in module gvtape failed" on the
+ * console of the machine it was loaded into, naming none of them.
+ */
+static void kmod_note(kmod_tally *k, const isec *in, const hld_rela *r,
+                      const char *sym, int64_t addend)
+{
+    const char *tn = hld_reloc_name(r->type);
+    char tbuf[24], fn[128], where[200];
+    uint64_t at = r->offset, delta = 0;
+    const char *f;
+    int milli = strncmp(sym, "__milli", 7) == 0;
+    int refused = !kmod_accepted(r->type);
+
+    if (!tn) { snprintf(tbuf, sizeof tbuf, "type %u", (unsigned)r->type); tn = tbuf; }
+    if (!milli && !refused) {
+        if (!kmod_seen(r->type) && !k->unseen++)
+            snprintf(k->first_unseen, sizeof k->first_unseen,
+                     "%s in %s against `%s'", tn, in->sh->name, sym);
+        return;
+    }
+    if (refused) k->refused++;
+    else k->milli++;
+    if (k->refused + k->milli > 25) return;
+    f = func_at(in->obj, in->idx, at & ~3ULL, &delta, fn, sizeof fn);
+    if (f)
+        snprintf(where, sizeof where, "%s+0x%llx (%s+0x%llx)", in->sh->name,
+                 (unsigned long long)at, f,
+                 (unsigned long long)(delta + (at & 3)));
+    else
+        snprintf(where, sizeof where, "%s+0x%llx", in->sh->name,
+                 (unsigned long long)at);
+    if (refused)
+        fprintf(stderr, "hld: %s: %s: %s against `%s'%+lld -- the module "
+                "loader does not process this type\n", in->obj->path, where,
+                tn, sym, (long long)addend);
+    else
+        fprintf(stderr, "hld: %s: %s: call to millicode `%s' -- the kernel "
+                "does not export it to modules\n", in->obj->path, where, sym);
 }
 
 /*
@@ -926,13 +954,6 @@ int hld_write_rel(hld_link *L)
              * Left for the kernel (or the next link) to bind. A kernel
              * module's references to kernel functions all end up here.
              */
-            if (L->kmod_check && strncmp(g->name, "__milli", 7) == 0) {
-                rerr(L, "--kernel-module: `%s' is a call to millicode, which "
-                        "the module loader cannot bind; build without "
-                        "integer division the compiler turns into a call, or "
-                        "with the kernel's own helpers", g->name, NULL);
-                goto done;
-            }
             break;
         }
         SYMROOM();
@@ -1020,7 +1041,7 @@ int hld_write_rel(hld_link *L)
                         } else if (sym) {
                             nm = str.buf + be32(symbuf + sym * SYM64_SIZE);
                         }
-                        kmod_note(&kt, r->type, o, nm);
+                        kmod_note(&kt, in, r, nm, r->addend + (int64_t)adj);
                     }
                     st64(p + 0, in->out_off + r->offset);
                     st64(p + 8, ELF64_R_INFO(sym, r->type));
@@ -1038,13 +1059,25 @@ int hld_write_rel(hld_link *L)
         osec *shtmod = osec_find_pub(L, ".shtmod");
         int have_wrapper = 0;
 
-        if (kt.refused) {
-            /* compiled without -Wc,-codeconvention,esnonreloc (+kernel) */
+        if (kt.refused || kt.milli) {
+            if (kt.refused + kt.milli > 25)
+                fprintf(stderr, "hld: ... and %lu more\n",
+                        kt.refused + kt.milli - 25);
             snprintf(L->err, HLD_ERRSZ, "--kernel-module: %lu relocation(s) "
-                     "the module loader cannot apply, first %.120s; compile "
-                     "for the kernel", kt.refused, kt.first_refused);
+                     "the module loader does not process, %lu call(s) to "
+                     "millicode; compile for the kernel (HP cc "
+                     "-Wc,-codeconvention,esnonreloc; gcc -mno-pic "
+                     "-minline-int-divide-max-throughput)", kt.refused,
+                     kt.milli);
             goto done;
         }
+        for (g = L->rsyms; g; g = g->r_next)
+            if (g->kind == HLD_SYM_UNDEF && strncmp(g->name, "__milli", 7) == 0) {
+                rerr(L, "--kernel-module: the module refers to millicode "
+                        "(`%s'), which the kernel does not export to modules",
+                     g->name, NULL);
+                goto done;
+            }
         if (!shtmod) {
             rerr(L, "--kernel-module: no .shtmod section, so the module "
                     "loader would refuse it (\"Non-existent or invalid "
