@@ -77,5 +77,6 @@ details and the evidence are in `docs/kernel-modules.md`.
 | `--kernel-module` | hld only: emit `.shtmod` as SHT_MOD, and refuse what the module loader cannot load (see `docs/kernel-modules.md`) |
 
 HP's linker writes its output even when it reports an error (exit 1). hld
-writes nothing on failure; a caller checking the exit status cannot tell the
-difference.
+does not write one when the link fails, and removes a partly written one;
+a file left by an earlier run is not removed. A caller checking the exit
+status sees no difference.

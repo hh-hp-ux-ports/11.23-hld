@@ -1062,13 +1062,16 @@ int hld_write_rel(hld_link *L)
         snprintf(L->err, HLD_ERRSZ, "%s: cannot create output", L->out_path);
         goto done;
     }
+    /* a half-written object must not be mistaken for a module */
     if (fwrite(img, 1, (size_t)total, f) != (size_t)total) {
         snprintf(L->err, HLD_ERRSZ, "%s: write failed", L->out_path);
         fclose(f);
+        remove(L->out_path);
         goto done;
     }
     if (fclose(f) != 0) {
         snprintf(L->err, HLD_ERRSZ, "%s: write failed", L->out_path);
+        remove(L->out_path);
         goto done;
     }
     if (L->verbose)

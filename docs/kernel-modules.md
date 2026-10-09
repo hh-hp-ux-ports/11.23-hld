@@ -113,12 +113,13 @@ Relocation types in the loadable modules, all of them: `IMM64`, `DIR64MSB`,
 `SEGREL64MSB`, `SECREL32MSB`, `SECREL64MSB` (debug), `PCREL21BI`, `TPREL22`
 (against kernel symbols). Never `PCREL21B`, `GPREL*`, `LTOFF*`, `FPTR*`.
 
-What the loader itself accepts was read statically out of 11.23's
+What the loader itself accepts was read statically (not by loading) out of 11.23's
 `/stand/vmunix` by the parallel gcc-for-modules work (its REPORT.md, same
 day): `mod_obj_relone` dispatches NONE, IMM14/22/64, DIR32/64, GPREL64I,
 GPREL32/64, LTOFF64I, PCREL60B, PCREL21B/BI/M/F, PCREL22, PCREL32/64,
 PCREL64I, LTOFF_FPTR64I/32/64, SEGREL32/64, SECREL32/64, LTV32/64, LDXMOV,
-TPREL22 and TPREL64 to handlers -- **PCREL21B to the same one as
+TPREL22 and TPREL64 to handlers (the report does not split MSB from LSB;
+hld's list assumes both, and LSB never occurs on this target) -- **PCREL21B to the same one as
 PCREL21BI** -- and everything else, notably **GPREL22, LTOFF22, LTOFF22X,
 LTOFF_FPTR22, FPTR64 and PLTOFF**, to "MOD: mod_obj_doreloc: Can't process
 reloc type %d" (GPREL22's known refusal is the positive control). Millicode
@@ -155,7 +156,7 @@ does, `.shtmod` included; `--kernel-module` (hld only) is the module mode.
 | relocation sections | `sh_addralign` 4, file offset 4-aligned | 8, 8-aligned | stricter alignment for 8-byte fields; the content is the same |
 | non-loaded section order | HP's own (`.note` first) | first seen | order carries no meaning |
 | symbol order | locals as HP; globals in HP's hash order | locals as HP; globals first seen | consumers look symbols up by name or index from the relocations |
-| output on error | written, exit 1 | not written, exit 1 | |
+| output on error | written, exit 1 | not written (a partial one removed), exit 1 | callers go by the exit status |
 
 `--kernel-module` (hld only) emits `.shtmod` as SHT_MOD and refuses, after an
 otherwise successful `-r`: a relocation type the loader's dispatch does not

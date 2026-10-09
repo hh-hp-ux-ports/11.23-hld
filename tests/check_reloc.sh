@@ -10,6 +10,9 @@
 # hld stamps its version into .comment.
 #
 # Runs anywhere: the fixtures are committed objects, and nothing is loaded.
+# The round-trip objects rt_a.o/rt_b.o in tests/obj come from tests/asm,
+# assembled like the other link fixtures there:
+#   ia64-hp-hpux11.23-as -mlp64 -o tests/obj/rt_a.o tests/asm/rt_a.s
 #
 # POSIX sh -- must also run on HP-UX (HP grep: plain BRE only).
 
@@ -68,6 +71,17 @@ if $CMP $F/r_pab.o $F/r_nfd.o > $W/blind.cmp 2>&1; then
     fail "hld-objcmp: sees no difference between two different objects"
 elif grep "e_flags 0x18 vs 0x198" $W/blind.cmp > /dev/null; then :; else
     fail "hld-objcmp: missed the e_flags difference:"; cat $W/blind.cmp
+fi
+
+# ... and a difference in contents and symbols, not only in the header:
+# r_z.o is pa.o alone, so .text is shorter and `bar' is undefined there.
+CHECKS=`expr $CHECKS + 1`
+$CMP -x .note -x .comment $F/r_pab.o $F/r_z.o > $W/blind2.cmp 2>&1
+if grep "^section \.text: size" $W/blind2.cmp > /dev/null \
+   && grep "^symbol bar:" $W/blind2.cmp > /dev/null \
+   && grep "^relocs \.data: " $W/blind2.cmp > /dev/null; then :; else
+    fail "hld-objcmp: missed a contents, symbol or relocation difference:"
+    cat $W/blind2.cmp
 fi
 
 # --- same contract as HP ld -r ---------------------------------------------
@@ -152,30 +166,37 @@ must_fail r_entry "no meaning with -r" -r -e foo -o $W/x.o $F/pa.o
 # --- what -r keeps is enough to link from ----------------------------------
 # Combine two objects with -r, then link a program from the result; it must
 # come out exactly as the program linked from the two objects directly. That
-# is the end-to-end proof that no relocation, addend or symbol was lost.
-CHECKS=`expr $CHECKS + 1`
+# is the end-to-end proof that no relocation, addend or symbol was lost:
+# multi_* calls across objects (PCREL21B against globals); gp_* reaches
+# short data gp-relatively and __gp by absolute address (GPREL22, IMM64)
+# against a linker-defined symbol and a global; rt_* reaches its own data
+# through local labels, i.e. GPREL22 and IMM64 against SECTION symbols,
+# whose addends -r must shift.
 L=tests/obj
-if [ -f $L/multi_a.o ] && [ -f $L/multi_b.o ] && [ -f $L/exit_stub.o ]; then
-    if $HLD -r -o $W/multi_r.o $L/multi_a.o $L/multi_b.o > $W/mr.err 2>&1 \
-       && $HLD -e _start -o $W/multi_via_r $W/multi_r.o $L/exit_stub.o \
-            >> $W/mr.err 2>&1 \
-       && $HLD -e _start -o $W/multi_direct $L/multi_a.o $L/multi_b.o \
-            $L/exit_stub.o >> $W/mr.err 2>&1; then
-        $CMP $W/multi_direct $W/multi_via_r > $W/mr.cmp 2>&1
-        if grep "^section \.text\|^section \.data\|^relocs \|^header" \
-                $W/mr.cmp > /dev/null; then
-            fail "a program linked from -r output differs from one linked" \
-                 "directly:"; cat $W/mr.cmp
+for pair in multi gp rt; do
+    CHECKS=`expr $CHECKS + 1`
+    [ -f $L/${pair}_a.o ] && [ -f $L/${pair}_b.o ] && [ -f $L/exit_stub.o ] \
+        || continue
+    if $HLD -r -o $W/${pair}_r.o $L/${pair}_a.o $L/${pair}_b.o \
+            > $W/$pair.rt.err 2>&1 \
+       && $HLD -e _start -o $W/${pair}_via_r $W/${pair}_r.o $L/exit_stub.o \
+            >> $W/$pair.rt.err 2>&1 \
+       && $HLD -e _start -o $W/${pair}_direct $L/${pair}_a.o $L/${pair}_b.o \
+            $L/exit_stub.o >> $W/$pair.rt.err 2>&1; then
+        $CMP $W/${pair}_direct $W/${pair}_via_r > $W/$pair.rt.cmp 2>&1
+        if grep "^section \|^relocs \|^header" $W/$pair.rt.cmp > /dev/null; then
+            fail "$pair: a program linked from -r output differs from one" \
+                 "linked directly:"; cat $W/$pair.rt.cmp
         fi
         if [ "`uname -s`" = "HP-UX" ] && [ "`uname -m`" = "ia64" ]; then
             CHECKS=`expr $CHECKS + 1`
-            $W/multi_via_r; rc=$?
-            [ $rc -eq 42 ] || fail "multi_via_r exited $rc, not 42"
+            $W/${pair}_via_r; rc=$?
+            [ $rc -eq 42 ] || fail "${pair}_via_r exited $rc, not 42"
         fi
     else
-        fail "linking through -r:"; cat $W/mr.err
+        fail "$pair: linking through -r:"; cat $W/$pair.rt.err
     fi
-fi
+done
 
 if [ $FAIL -eq 0 ]; then
     echo "OK: relocatable-output checks passed ($CHECKS checks)"
