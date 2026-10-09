@@ -46,6 +46,7 @@ check: all
 	sh tests/check_patch.sh
 	sh tests/check_link.sh
 	sh tests/check_archive.sh
+	sh tests/check_reloc.sh
 	sh tests/check_dynamic.sh
 
 # Three stages: hld linked by the system linker, then by itself, then by that.
