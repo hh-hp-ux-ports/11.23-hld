@@ -187,6 +187,31 @@ for rel in 11.23 11.31; do
         fail "km $rel: hld -r --kernel-module=$rel failed:"; cat $W/km_$rel.err
     fi
 done
+# 11.31's REDUCEDFP is a promise about the code: f0, f1, f6-f11 only. hld
+# checks it instruction by instruction when it makes the promise. fp_wide
+# breaks it nine times, in nine formats; each must be named, by object,
+# section and offset, and none of its three conforming lines.
+CHECKS=`expr $CHECKS + 1`
+if $HLD -r --kernel-module=11.31 -o $W/x.o tests/obj/fp_wide.o \
+        $F/tkm_meta.o $F/tkm_shtmod.o > $W/fp.err 2>&1; then
+    fail "fp_wide: linked for 11.31 with f12..f40 in its code"
+else
+    n=`grep -c "^hld: tests/obj/fp_wide.o: .text+0x[0-9a-f]* (fp_wide+0x[0-9a-f]*): f[0-9]* is outside" $W/fp.err`
+    [ "$n" -eq 9 ] && grep "9 instruction(s)" $W/fp.err > /dev/null \
+        || { fail "fp_wide: expected 9 named instructions, got $n:"; cat $W/fp.err; }
+    for want in "+0x1 .*f12" "+0x11 .*f40" "+0x21 .*f13" "+0x31 .*f14" \
+                "+0x41 .*f2 " "+0x50 .*f32" "+0x51 .*f33" "+0x60 .*f15" \
+                "+0x61 .*f16"; do
+        grep "text$want" $W/fp.err > /dev/null \
+            || fail "fp_wide: \`$want' not reported"
+    done
+fi
+# The same code makes no such promise for 11.23 (0x198), so it links there.
+CHECKS=`expr $CHECKS + 1`
+$HLD -r --kernel-module=11.23 -o $W/x.o tests/obj/fp_wide.o $F/tkm_meta.o \
+    $F/tkm_shtmod.o > $W/fp23.err 2>&1 \
+    || { fail "fp_wide: refused for 11.23, which claims nothing about FP:"; cat $W/fp23.err; }
+
 # An ordinary object is not kernel code, whatever release is named.
 must_fail km_ordinary "lack NOFUNCDESC_CONS_GP" -r --kernel-module=11.23 \
     -o $W/x.o $F/pa.o $F/tkm_meta.o $F/tkm_shtmod.o

@@ -182,11 +182,32 @@ The flags are asserted only where they can be backed:
   with function descriptors and its own gp is not kernel code, and hld
   refuses it naming the file, rather than relabel it;
 - the REDUCEDFP mismatch HP ld refuses is not checked between inputs;
-  instead, for 11.31, the code itself is checked (below);
+  instead, for 11.31, the code itself is checked: every instruction that
+  names a floating-point register must name only f0, f1 or f6-f11, and each
+  one that does not is reported by object, section, offset and function
+  (`src/kmod_fp.c`);
 - ABSOLUTE is backed by the relocation check: a module with no gp-relative
   or linkage-table relocation addresses its data absolutely;
 - the inputs' CONS_GP bit and anything else are not carried; the
   architecture byte is.
+
+#### Checking the REDUCEDFP promise
+
+What REDUCEDFP allows, measured: across the 36 modules of 11.23's
+`/usr/conf/mod` (all 0x1b8) the only FRs named are f0, f1 and f6-f11 (f6
+1825 times ... f11 331), and gcc keeps to the same set with
+`-mfixed-range=f2-f5,f12-f127` (the parallel gcc work's ablation; without
+it gcc allocates f12-f15 and f32-f61). f2-f5 are outside too.
+
+The checker decodes only the formats that carry an FR field -- every F-unit
+format, and on the M unit ldf/ldfp/stf, setf, getf and chk.s.m with an FR --
+reading each field only where its format has one. It was validated against
+GNU objdump's disassembly, instruction by instruction: on HP's 64-bit
+`libm.so.1` both find the same 32,184 instructions naming an FR outside the
+set (27,621 bundles), and the same bundles in `libc.so.1` (1,137) and
+`dld.so` (230); on the 36 modules both find none. `tests/asm/fp_wide.s`
+breaks the rule once in each of nine formats and must be reported nine
+times, its conforming lines not at all.
 
 ### Compared with HP ld -r on real modules
 

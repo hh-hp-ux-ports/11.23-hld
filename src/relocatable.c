@@ -31,6 +31,7 @@
 #include <string.h>
 
 #include "link.h"
+#include "kmod_fp.h"
 
 static void rerr(hld_link *L, const char *fmt, const char *a, const char *b)
 {
@@ -581,6 +582,102 @@ static void kmod_note(kmod_tally *k, uint32_t type, const osec *o,
     }
 }
 
+/*
+ * The function an offset in an input section belongs to, for a diagnostic
+ * a person can act on: "in vt_claim+0x40" rather than ".text+0x1e2".
+ */
+static const char *func_at(hld_elf *e, uint32_t shndx, uint64_t off,
+                           uint64_t *delta, char *buf, size_t bufsz)
+{
+    uint32_t j;
+    const char *best = NULL;
+    uint64_t bestv = 0;
+
+    for (j = 1; j < e->eh.shnum; j++) {
+        hld_sym *syms;
+        size_t n, k;
+        char err[HLD_ERRSZ];
+
+        if (e->shdrs[j].type != SHT_SYMTAB) continue;
+        syms = hld_read_syms(e, &e->shdrs[j], &n, err);
+        if (!syms) return NULL;
+        for (k = 1; k < n; k++) {
+            if (syms[k].shndx != shndx
+                || ELF64_ST_TYPE(syms[k].info) != STT_FUNC) continue;
+            if (syms[k].value <= off && (!best || syms[k].value > bestv)
+                && (!syms[k].size || off < syms[k].value + syms[k].size)) {
+                best = syms[k].name;
+                bestv = syms[k].value;
+            }
+        }
+        if (best) snprintf(buf, bufsz, "%s", best);
+        free(syms);
+        break;
+    }
+    *delta = off - bestv;
+    return best ? buf : NULL;
+}
+
+/*
+ * 11.31's kernel objects claim REDUCEDFP: their code names no floating-
+ * point register but f0, f1 and f6-f11, so the kernel does not save the
+ * rest around them. When the target release has hld make that claim, the
+ * code has to keep it -- gcc does only when told (-mfixed-range=f2-f5,
+ * f12-f127), and a module that breaks it corrupts other processes'
+ * floating point long after it ran. Every offending instruction is named.
+ */
+static int kmod_check_fp(hld_link *L)
+{
+    osec *o;
+    unsigned long total = 0;
+
+    for (o = L->osecs; o; o = o->next) {
+        isec *in;
+        if (!(o->flags & SHF_EXECINSTR) || o->type == SHT_NOBITS) continue;
+        for (in = o->first; in; in = in->next) {
+            const uint8_t *code;
+            uint64_t b;
+            char err[HLD_ERRSZ];
+
+            if (!in->sh || !in->sh->size) continue;
+            code = hld_sec_data(in->obj, in->sh, err);
+            if (!code) { snprintf(L->err, HLD_ERRSZ, "%s", err); return -1; }
+            for (b = 0; b + 16 <= in->sh->size; b += 16) {
+                unsigned slot;
+                for (slot = 0; slot < 3; slot++) {
+                    unsigned fr;
+                    char fn[128];
+                    uint64_t delta = 0;
+                    const char *f;
+
+                    if (!hld_kmod_fp_slot(code + b, slot, &fr)) continue;
+                    if (total++ >= 20) continue;
+                    f = func_at(in->obj, in->idx, b, &delta, fn, sizeof fn);
+                    if (f)
+                        fprintf(stderr, "hld: %s: %s+0x%llx (%s+0x%llx): f%u "
+                                "is outside the reduced floating-point set "
+                                "(f0-f1, f6-f11)\n", in->obj->path,
+                                in->sh->name, (unsigned long long)(b + slot),
+                                f, (unsigned long long)(delta + slot), fr);
+                    else
+                        fprintf(stderr, "hld: %s: %s+0x%llx: f%u is outside "
+                                "the reduced floating-point set (f0-f1, "
+                                "f6-f11)\n", in->obj->path, in->sh->name,
+                                (unsigned long long)(b + slot), fr);
+                }
+            }
+        }
+    }
+    if (total) {
+        snprintf(L->err, HLD_ERRSZ, "--kernel-module=11.31: %lu instruction(s)"
+                 " use floating-point registers the REDUCEDFP model of an "
+                 "11.31 kernel object excludes; build with "
+                 "-mfixed-range=f2-f5,f12-f127 (gcc)", total);
+        return -1;
+    }
+    return 0;
+}
+
 int hld_write_rel(hld_link *L)
 {
     osec **ord = NULL, *o, *comment = NULL;
@@ -936,6 +1033,7 @@ int hld_write_rel(hld_link *L)
     }
 
     /* --- the kernel loader's view of it, when asked --------------------- */
+    if (L->kmod_target == 1131 && kmod_check_fp(L) < 0) goto done;
     if (L->kmod_check) {
         osec *shtmod = osec_find_pub(L, ".shtmod");
         int have_wrapper = 0;
