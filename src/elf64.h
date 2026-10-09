@@ -98,6 +98,18 @@ HLD_INLINE void stle64(uint8_t *p, uint64_t v)
 #define EF_IA_64_TRAPNIL 0x00000001  /* -z: trap NIL derefs (obs: HP ld outputs) */
 #define EF_IA_64_BE      0x00000008
 #define EF_IA_64_ABI64   0x00000010
+/*
+ * The code-model bits. Names as HP's linker prints them in its diagnostics;
+ * how a relocatable link combines them was measured against HP ld -r
+ * (docs/kernel-modules.md): REDUCEDFP and NOFUNCDESC_CONS_GP must agree
+ * across inputs, CONS_GP and ABSOLUTE are or'ed, the architecture byte takes
+ * the highest value.
+ */
+#define EF_IA_64_REDUCEDFP          0x00000020
+#define EF_IA_64_CONS_GP            0x00000040
+#define EF_IA_64_NOFUNCDESC_CONS_GP 0x00000080
+#define EF_IA_64_ABSOLUTE           0x00000100
+#define EF_IA_64_ARCH               0xff000000u
 
 /* On-disk record sizes (ELF64) */
 /*
@@ -146,6 +158,7 @@ HLD_INLINE void stle64(uint8_t *p, uint64_t v)
 #define SHT_GROUP         17
 #define SHT_SYMTAB_SHNDX  18
 #define SHT_LOOS          0x60000000u
+#define SHT_HP_MOD        0x60000001u /* .shtmod in a loadable kernel module (obs) */
 #define SHT_HP_OPT_ANNOT  0x60000004u /* .HP.opt_annot in HP cc objects (obs) */
 #define SHT_HIOS          0x6fffffffu
 #define SHT_IA_64_EXT     0x70000000u

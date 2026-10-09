@@ -416,6 +416,7 @@ const char *hld_sht_name(uint32_t type)
     case SHT_PREINIT_ARRAY: return "PREINIT_ARRAY";
     case SHT_GROUP:         return "GROUP";
     case SHT_SYMTAB_SHNDX:  return "SYMTAB_SHNDX";
+    case SHT_HP_MOD:        return "HP_MOD";
     case SHT_HP_OPT_ANNOT:  return "HP_OPT_ANNOT";
     case SHT_IA_64_EXT:     return "IA_64_EXT";
     case SHT_IA_64_UNWIND:  return "IA_64_UNWIND";

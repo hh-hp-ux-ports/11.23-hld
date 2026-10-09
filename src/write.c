@@ -112,10 +112,10 @@ static void put_phdr(int e32, uint8_t *p, uint32_t type, uint32_t flags,
     st64(p + 48, align);
 }
 
-static void put_shdr(int e32, uint8_t *p, uint32_t name, uint32_t type,
-                     uint64_t flags, uint64_t addr, uint64_t off,
-                     uint64_t size, uint32_t link, uint32_t info,
-                     uint64_t align, uint64_t entsize)
+void hld_put_shdr(int e32, uint8_t *p, uint32_t name, uint32_t type,
+                  uint64_t flags, uint64_t addr, uint64_t off,
+                  uint64_t size, uint32_t link, uint32_t info,
+                  uint64_t align, uint64_t entsize)
 {
     st32(p + 0, name);
     st32(p + 4, type);
@@ -140,9 +140,9 @@ static void put_shdr(int e32, uint8_t *p, uint32_t name, uint32_t type,
     st64(p + 56, entsize);
 }
 
-static void put_sym(int e32, uint8_t *p, uint32_t name, uint8_t info,
-                    uint8_t other, uint16_t shndx, uint64_t value,
-                    uint64_t size)
+void hld_put_sym(int e32, uint8_t *p, uint32_t name, uint8_t info,
+                 uint8_t other, uint16_t shndx, uint64_t value,
+                 uint64_t size)
 {
     st32(p + 0, name);
     if (e32) {
@@ -264,7 +264,7 @@ int hld_write_exec(hld_link *L)
                         symbuf = nb;
                         symcap *= 2;
                     }
-                    put_sym(e32, symbuf + nsym * symsz1,
+                    hld_put_sym(e32, symbuf + nsym * symsz1,
                             strtab_add(&str, s->name), s->info, s->other,
                             (uint16_t)in->out->shndx,
                             in->out->addr + in->out_off + s->value, s->size);
@@ -294,7 +294,7 @@ int hld_write_exec(hld_link *L)
                 shndx = (uint16_t)g->in->out->shndx;
             nameoff = strtab_add(&str, g->name);
             info = ELF64_ST_INFO(g->bind ? g->bind : STB_GLOBAL, g->type);
-            put_sym(e32, symbuf + nsym * symsz1, nameoff, info, g->other,
+            hld_put_sym(e32, symbuf + nsym * symsz1, nameoff, info, g->other,
                     shndx, g->value, g->size);
             nsym++;
         }
@@ -365,15 +365,15 @@ int hld_write_exec(hld_link *L)
                  */
                 if (L->dynamic && o == L->dynsymsec)
                     info = L->ndynlocal ? L->ndynlocal : 1;
-                put_shdr(e32, shtab + o->shndx * shsz, names[k], o->type,
+                hld_put_shdr(e32, shtab + o->shndx * shsz, names[k], o->type,
                          o->flags, o->addr, o->off, o->size, link, info,
                          o->align, o->entsize);
             }
-            put_shdr(e32, shtab + sym_ndx * shsz, n_sym, SHT_SYMTAB, 0, 0,
+            hld_put_shdr(e32, shtab + sym_ndx * shsz, n_sym, SHT_SYMTAB, 0, 0,
                      symoff, symsz, str_ndx, nlocal, 8, symsz1);
-            put_shdr(e32, shtab + str_ndx * shsz, n_str, SHT_STRTAB, 0, 0,
+            hld_put_shdr(e32, shtab + str_ndx * shsz, n_str, SHT_STRTAB, 0, 0,
                      stroff, str.len, 0, 0, 1, 0);
-            put_shdr(e32, shtab + shstr_ndx * shsz, n_shstr, SHT_STRTAB, 0, 0,
+            hld_put_shdr(e32, shtab + shstr_ndx * shsz, n_shstr, SHT_STRTAB, 0, 0,
                      shstroff, shstr.len, 0, 0, 1, 0);
             free(names);
 

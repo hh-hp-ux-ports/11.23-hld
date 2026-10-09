@@ -313,6 +313,13 @@ hld_gsym *hld_sym_lookup(hld_link *L, const char *name)
     return NULL;
 }
 
+static hld_gsym *sym_intern(hld_link *L, const char *name);
+
+hld_gsym *hld_sym_intern(hld_link *L, const char *name)
+{
+    return sym_intern(L, name);
+}
+
 static hld_gsym *sym_intern(hld_link *L, const char *name)
 {
     unsigned h = symhash(name);
@@ -464,6 +471,12 @@ int hld_input_object(hld_link *L, hld_elf *e)
         L->objs_cap = nc;
     }
     L->objs[L->nobjs++] = e;
+
+    /*
+     * A relocatable link keeps every section under its own name and every
+     * symbol, local ones included, so it collects for itself.
+     */
+    if (L->relocatable) return hld_rel_input(L, e);
 
     if (collect_sections_of(L, e) < 0) return -1;
     if (resolve_symbols_of(L, e) < 0) return -1;

@@ -45,6 +45,12 @@ typedef struct osec {
     isec *first, **tail;      /* contributions in link order */
     struct osec *next;
     struct osec *hnext;       /* chain in L->osec_hash, keyed by name */
+    /* relocatable output (-r) only */
+    struct osec *assoc;       /* unwind table: the code section it describes */
+    uint32_t symidx;          /* its STT_SECTION symbol */
+    uint64_t nrela;           /* relocations against it */
+    uint32_t rela_shndx;      /* index of its .rela section, 0 if none */
+    int order;                /* first-seen rank, for a stable sort */
 } osec;
 
 /* Address ranges of mapped code, sorted; see addr_is_code(). */
@@ -96,7 +102,11 @@ typedef struct hld_gsym {
     uint64_t stub_off;        /* IMPORT: byte offset within the stub section */
     uint32_t dynidx;          /* index in .dynsym */
     uint32_t strx;            /* name offset in .dynstr */
+    uint32_t r_symidx;        /* -r: index in the output .symtab */
+    int r_listed;             /* -r: on L->rsyms already */
+    uint64_t align;           /* -r COMMON: the largest alignment asked for */
     struct hld_gsym *next;    /* hash chain */
+    struct hld_gsym *r_next;  /* -r: in the order first seen */
 } hld_gsym;
 
 #define HLD_SYMHASH 1021
@@ -328,6 +338,17 @@ typedef struct {
     osec *commentsec;         /* the stamp saying which linker built this */
     osec *interpsec, *dynsymsec, *dynstrsec, *hashsec, *dynamicsec, *reservesec;
 
+    /*
+     * Relocatable output (-r): one object combining the inputs, relocations
+     * kept for whoever links or loads it next -- the form a kernel module
+     * takes. See relocatable.c.
+     */
+    int relocatable;
+    int kmod_check;           /* --kernel-module: refuse what the loader does */
+    uint32_t rflags;          /* code-model e_flags, from the first input */
+    const char *rflags_from;  /* that input, for the diagnostic */
+    hld_gsym *rsyms, **rsyms_tail;   /* globals in first-seen order */
+
     /* options */
     const char *out_path;
     const char *entry_name;
@@ -395,7 +416,20 @@ int  hld_reloc_target(hld_link *L, hld_elf *e, hld_sym *syms, size_t nsyms,
                       uint64_t *off_out, const char **name_out);
 int  hld_fill_dynamic(hld_link *L);
 
+hld_gsym *hld_sym_intern(hld_link *L, const char *name);
+
+/* relocatable.c */
+int  hld_rel_input(hld_link *L, hld_elf *e);
+int  hld_write_rel(hld_link *L);
+
 /* write.c */
 int  hld_write_exec(hld_link *L);
+void hld_put_shdr(int e32, uint8_t *p, uint32_t name, uint32_t type,
+                  uint64_t flags, uint64_t addr, uint64_t off, uint64_t size,
+                  uint32_t link, uint32_t info, uint64_t align,
+                  uint64_t entsize);
+void hld_put_sym(int e32, uint8_t *p, uint32_t name, uint8_t info,
+                 uint8_t other, uint16_t shndx, uint64_t value,
+                 uint64_t size);
 
 #endif /* HLD_LINK_H */

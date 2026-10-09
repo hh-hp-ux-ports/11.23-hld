@@ -43,6 +43,11 @@ static void usage(void)
     fprintf(stderr,
         "usage: hld [options] file.o...\n"
         "  -o FILE      output file (default a.out)\n"
+        "  -r           combine the inputs into one relocatable object, every\n"
+        "               relocation kept -- how a kernel module is linked\n"
+        "  --kernel-module  with -r: also refuse what the HP-UX module loader\n"
+        "               cannot load (gp-relative and linkage-table relocations,\n"
+        "               millicode, a missing .shtmod or KC_META)\n"
         "  -e SYM       entry point (default main)\n"
         "  -z           trap NULL dereferences (sets the TRAPNIL flag)\n"
         "  -m           print a link map to stdout\n"
@@ -83,11 +88,30 @@ int main(int argc, char **argv)
     size_t ngroup = 0, group_cap = 0;
     int in_group = 0;
 
+    int entry_given = 0;
+
     hld_start = clock();
     memset(&L, 0, sizeof L);
     L.osec_tail = &L.osecs;
     L.out_path = "a.out";
     L.entry_name = "main";      /* HP ld's default on this platform */
+
+    /*
+     * -r changes how every input is read -- each section kept under its own
+     * name, local symbols kept -- so it has to be known before the first
+     * object is, wherever on the command line it was written.
+     */
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-r") == 0) L.relocatable = 1;
+        /* an option's argument is not an option */
+        if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "-e") == 0
+            || strcmp(argv[i], "-u") == 0 || strcmp(argv[i], "+h") == 0
+            || strcmp(argv[i], "+b") == 0 || strcmp(argv[i], "+e") == 0
+            || strcmp(argv[i], "+ee") == 0 || strcmp(argv[i], "-B") == 0
+            || strcmp(argv[i], "+Accept") == 0 || strcmp(argv[i], "-soname") == 0
+            || strcmp(argv[i], "-L") == 0 || strcmp(argv[i], "-l") == 0)
+            i++;
+    }
 
     for (i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -193,7 +217,13 @@ int main(int argc, char **argv)
             continue;
         }
         if (strcmp(a, "-o") == 0 && i + 1 < argc) { L.out_path = argv[++i]; continue; }
-        if (strcmp(a, "-e") == 0 && i + 1 < argc) { L.entry_name = argv[++i]; continue; }
+        if (strcmp(a, "-e") == 0 && i + 1 < argc) {
+            L.entry_name = argv[++i];
+            entry_given = 1;
+            continue;
+        }
+        if (strcmp(a, "-r") == 0) continue;            /* seen above */
+        if (strcmp(a, "--kernel-module") == 0) { L.kmod_check = 1; continue; }
         if (strcmp(a, "-u") == 0 && i + 1 < argc) {
             /* seed an undefined symbol so archives are searched for it */
             if (hld_add_undefined(&L, argv[++i]) < 0) goto fail;
@@ -351,6 +381,39 @@ int main(int argc, char **argv)
     }
 
     if (!ninputs) { usage(); return 1; }
+
+    if (L.kmod_check && !L.relocatable) {
+        fprintf(stderr, "hld: --kernel-module checks a module, which is "
+                "linked with -r\n");
+        hld_link_free(&L);
+        return 1;
+    }
+    if (L.relocatable) {
+        /*
+         * Options that describe a loadable image have nothing to act on in
+         * a relocatable object. Ignoring them would hand back something
+         * other than what was asked for.
+         */
+        const char *bad = NULL;
+        if (L.shared) bad = "-b";
+        else if (L.dynamic) bad = "-dynamic";
+        else if (entry_given) bad = "-e";
+        else if (L.soname) bad = "+h";
+        else if (L.nrpaths) bad = "+b";
+        else if (L.nexports || L.hide_all) bad = "+e/+hideallsymbols";
+        else if (L.bsymbolic) bad = "-B symbolic";
+        else if (L.map) bad = "-m";
+        if (bad) {
+            fprintf(stderr, "hld: %s has no meaning with -r\n", bad);
+            hld_link_free(&L);
+            return 1;
+        }
+        if (hld_write_rel(&L) < 0) goto fail;
+        phase("write-rel");
+        free(group);
+        hld_link_free(&L);
+        return 0;
+    }
 
     hld_time_on = getenv("HLD_TIME") != NULL;
     if (hld_time_on)

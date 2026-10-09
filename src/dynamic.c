@@ -1147,6 +1147,18 @@ static int add_dso(hld_link *L, const char *path, int indirect);
 
 int hld_add_dso(hld_link *L, const char *path)
 {
+    /*
+     * A relocatable object cannot record a dependency: it has no dynamic
+     * section to put one in, and whoever links it next would never hear of
+     * the library. HP ld -r takes archives (measured) and nothing else, so
+     * say why rather than drop the library on the floor.
+     */
+    if (L->relocatable) {
+        snprintf(L->err, HLD_ERRSZ, "%s: a shared library cannot be an input"
+                 " to a relocatable link (-r); name the archive instead",
+                 path);
+        return -1;
+    }
     return add_dso(L, path, 0);
 }
 
