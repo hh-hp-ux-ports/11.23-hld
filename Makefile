@@ -20,7 +20,7 @@ READER  = src/elfread.c
 LINKSRC = src/hld.c src/link.c src/write.c src/dynamic.c src/archive.c src/stubs.c src/relocatable.c src/ia64_patch.c $(READER)
 HDRS    = src/elf64.h src/port.h src/ia64_patch.h src/link.h src/version.h
 
-all: $(BUILD)/hld $(BUILD)/hld-readelf $(BUILD)/patch_harness
+all: $(BUILD)/hld $(BUILD)/hld-readelf $(BUILD)/hld-objcmp $(BUILD)/patch_harness
 
 $(BUILD)/hld: $(LINKSRC) $(HDRS)
 	mkdir -p $(BUILD)
@@ -29,6 +29,10 @@ $(BUILD)/hld: $(LINKSRC) $(HDRS)
 $(BUILD)/hld-readelf: tools/hld_readelf.c $(READER) $(HDRS)
 	mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tools/hld_readelf.c $(READER)
+
+$(BUILD)/hld-objcmp: tools/hld_objcmp.c $(READER) $(HDRS)
+	mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -o $@ tools/hld_objcmp.c $(READER)
 
 $(BUILD)/patch_harness: tests/patch_harness.c $(READER) src/ia64_patch.c $(HDRS)
 	mkdir -p $(BUILD)
