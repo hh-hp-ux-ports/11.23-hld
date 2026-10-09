@@ -260,6 +260,12 @@ does, *without* the kernel code model): the same `.note` and `.comment`
 differences and nothing else. `--kernel-module` refuses it -- 8 `LTOFF22X`/
 `LDXMOV` relocations -- consistent with that skeleton never having loaded.
 
+`hld -r` is deterministic across hosts: built natively on 11.23 (gcc
+4.7.4, `-O0`), it writes byte for byte the same objects as on Linux -- the
+test suite's outputs and gvtape's (`--kernel-module=11.23`, cksum
+1528738918). Natively the relocatable suite also runs what it links:
+the programs linked through `-r` exit 42.
+
 Neither output has been loaded by a kernel; see "Open" below.
 
 ## Open
