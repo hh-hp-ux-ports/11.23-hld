@@ -49,6 +49,10 @@ static void usage(void)
         "               as SHT_MOD, and refuse what the module loader cannot\n"
         "               load (relocation types it does not process, millicode,\n"
         "               a missing .shtmod or KC_META)\n"
+        "  --kernel-module=11.23|11.31  the same, for that release: the output\n"
+        "               gets its kernel e_flags (0x198, 0x1b8) whatever the\n"
+        "               inputs carry, and for 11.31 the code is checked to keep\n"
+        "               to the reduced floating-point register set it claims\n"
         "  -e SYM       entry point (default main)\n"
         "  -z           trap NULL dereferences (sets the TRAPNIL flag)\n"
         "  -m           print a link map to stdout\n"
@@ -104,6 +108,17 @@ int main(int argc, char **argv)
      */
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-r") == 0) L.relocatable = 1;
+        /* so is the target release, which decides how e_flags are read */
+        if (strncmp(argv[i], "--kernel-module=", 16) == 0) {
+            const char *rel = argv[i] + 16;
+            if (strcmp(rel, "11.23") == 0) L.kmod_target = 1123;
+            else if (strcmp(rel, "11.31") == 0) L.kmod_target = 1131;
+            else {
+                fprintf(stderr, "hld: --kernel-module=%s: the release is "
+                        "11.23 or 11.31\n", rel);
+                return 1;
+            }
+        }
         /* an option's argument is not an option */
         if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "-e") == 0
             || strcmp(argv[i], "-u") == 0 || strcmp(argv[i], "+h") == 0
@@ -224,7 +239,11 @@ int main(int argc, char **argv)
             continue;
         }
         if (strcmp(a, "-r") == 0) continue;            /* seen above */
-        if (strcmp(a, "--kernel-module") == 0) { L.kmod_check = 1; continue; }
+        if (strcmp(a, "--kernel-module") == 0
+            || strncmp(a, "--kernel-module=", 16) == 0) {
+            L.kmod_check = 1;           /* the release was read above */
+            continue;
+        }
         if (strcmp(a, "-u") == 0 && i + 1 < argc) {
             /* seed an undefined symbol so archives are searched for it */
             if (hld_add_undefined(&L, argv[++i]) < 0) goto fail;

@@ -13,6 +13,7 @@
 # The round-trip objects rt_a.o/rt_b.o in tests/obj come from tests/asm,
 # assembled like the other link fixtures there:
 #   ia64-hp-hpux11.23-as -mlp64 -o tests/obj/rt_a.o tests/asm/rt_a.s
+# and km_gnu.o (and fp_*.o) as gcc's kernel route does, with -mauto-pic.
 #
 # POSIX sh -- must also run on HP-UX (HP grep: plain BRE only).
 
@@ -151,6 +152,45 @@ must_fail kmod_noshtmod "no \.shtmod" -r --kernel-module -o $W/x.o \
 must_fail kmod_nometa "KC_META" -r --kernel-module -o $W/x.o \
     $F/tkm_body.o $F/tkm_shtmod.o
 must_fail kmod_needs_r "with -r" --kernel-module -o $W/x.o $F/tkm_body.o
+
+# --- a target release: the kernel's e_flags, whatever the inputs say ------
+# A gcc/GNU-as object (0x98: no ABSOLUTE, no REDUCEDFP -- GNU as cannot
+# spell them) with HP-as KC_META and .shtmod (0x198). Plain -r ors them to
+# 0x198; --kernel-module=11.23 must give 0x198 and =11.31 0x1b8, with
+# nothing but e_flags (and the SHT_MOD type) differing from plain -r.
+G=tests/obj/km_gnu.o
+CHECKS=`expr $CHECKS + 1`
+if $HLD -r -o $W/km_plain.o $G $F/tkm_meta.o $F/tkm_shtmod.o \
+        > $W/km.err 2>&1; then :; else
+    fail "km: plain -r failed:"; cat $W/km.err
+fi
+for rel in 11.23 11.31; do
+    case $rel in 11.23) want=0x198 ;; *) want=0x1b8 ;; esac
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -r --kernel-module=$rel -o $W/km_$rel.o $G $F/tkm_meta.o \
+            $F/tkm_shtmod.o > $W/km_$rel.err 2>&1; then
+        $CMP -x .comment $W/km_plain.o $W/km_$rel.o > $W/km_$rel.cmp 2>&1
+        if [ "$rel" = 11.23 ]; then
+            grep "^1 difference" $W/km_$rel.cmp > /dev/null \
+                || fail "km $rel: more than .shtmod's type changed:" \
+                        "`cat $W/km_$rel.cmp`"
+        elif grep "^header: e_flags 0x198 vs $want$" $W/km_$rel.cmp \
+                > /dev/null && grep "^2 difference" $W/km_$rel.cmp \
+                > /dev/null; then :; else
+            fail "km $rel: expected e_flags $want and .shtmod's type only:"
+            cat $W/km_$rel.cmp
+        fi
+        $RE -h $W/km_$rel.o > $W/km_$rel.h
+        grep "Flags: *$want " $W/km_$rel.h > /dev/null \
+            || fail "km $rel: e_flags are not $want: `grep Flags $W/km_$rel.h`"
+    else
+        fail "km $rel: hld -r --kernel-module=$rel failed:"; cat $W/km_$rel.err
+    fi
+done
+# An ordinary object is not kernel code, whatever release is named.
+must_fail km_ordinary "lack NOFUNCDESC_CONS_GP" -r --kernel-module=11.23 \
+    -o $W/x.o $F/pa.o $F/tkm_meta.o $F/tkm_shtmod.o
+must_fail km_release "11.23 or 11.31" -r --kernel-module=11.11 -o $W/x.o $G
 
 # --- refusals HP ld -r makes too --------------------------------------------
 # e_flags: a kernel object and an ordinary one, either order; then the

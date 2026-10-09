@@ -40,13 +40,18 @@ static const char *etype_name(uint16_t t)
 static void print_ehdr(const hld_elf *e)
 {
     const hld_ehdr *h = &e->eh;
-    char fl[64];
+    char fl[128];
 
     fl[0] = 0;
     if (h->machine == EM_IA_64) {
         if (h->flags & EF_IA_64_TRAPNIL) strcat(fl, " TRAPNIL");
         if (h->flags & EF_IA_64_BE)      strcat(fl, " BE");
         if (h->flags & EF_IA_64_ABI64)   strcat(fl, " ABI64");
+        if (h->flags & EF_IA_64_REDUCEDFP) strcat(fl, " REDUCEDFP");
+        if (h->flags & EF_IA_64_CONS_GP) strcat(fl, " CONS_GP");
+        if (h->flags & EF_IA_64_NOFUNCDESC_CONS_GP)
+            strcat(fl, " NOFUNCDESC_CONS_GP");
+        if (h->flags & EF_IA_64_ABSOLUTE) strcat(fl, " ABSOLUTE");
     }
     printf("ELF header:\n");
     printf("  Class/Data:  ELF%d, %s\n", h->cls == ELFCLASS64 ? 64 : 32,

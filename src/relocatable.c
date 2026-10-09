@@ -71,6 +71,22 @@ static int rel_flags(hld_link *L, hld_elf *e)
     uint32_t f = e->eh.flags;
     size_t i;
 
+    /*
+     * With a target release named, the output's code-model bits are that
+     * release's kernel convention, not a combination of the inputs' -- the
+     * gcc route to a module, whose assembler cannot spell ABSOLUTE or
+     * REDUCEDFP, depends on it. What cannot be asserted for an input is
+     * the code model itself: an object compiled with function descriptors
+     * and a gp of its own is not kernel code whatever its header says.
+     */
+    if (L->kmod_target && !(f & EF_IA_64_NOFUNCDESC_CONS_GP)) {
+        snprintf(L->err, HLD_ERRSZ,
+                 "%s: e_flags 0x%x lack NOFUNCDESC_CONS_GP (0x80): not "
+                 "compiled for the kernel (HP cc -Wc,-codeconvention,"
+                 "esnonreloc or +kernel; gcc -mno-pic -Wa,--mauto-pic)",
+                 e->path, (unsigned)f);
+        return -1;
+    }
     if (!L->rflags_from) {
         L->rflags = f & (EF_IA_64_REDUCEDFP | EF_IA_64_CONS_GP
                          | EF_IA_64_NOFUNCDESC_CONS_GP | EF_IA_64_ABSOLUTE
@@ -79,6 +95,8 @@ static int rel_flags(hld_link *L, hld_elf *e)
         return 0;
     }
     for (i = 0; i < sizeof must / sizeof must[0]; i++) {
+        /* REDUCEDFP is the target's to set, and is checked in the code */
+        if (L->kmod_target && must[i].bit == EF_IA_64_REDUCEDFP) continue;
         if ((f & must[i].bit) != (L->rflags & must[i].bit)) {
             snprintf(L->err, HLD_ERRSZ,
                      "mismatched %s: %s has it %s, but %s, the first input, "
@@ -94,6 +112,25 @@ static int rel_flags(hld_link *L, hld_elf *e)
     if ((f & EF_IA_64_ARCH) > (L->rflags & EF_IA_64_ARCH))
         L->rflags = (L->rflags & ~EF_IA_64_ARCH) | (f & EF_IA_64_ARCH);
     return 0;
+}
+
+/*
+ * The output's e_flags. A named target release gets its kernel convention,
+ * measured on that release's own modules and compilers: 11.23's HP cc
+ * kernel objects are 0x198 (BE, ABI64, NOFUNCDESC_CONS_GP, ABSOLUTE);
+ * 11.31's +kernel objects and every module in either release's
+ * /usr/conf/mod are 0x1b8, adding REDUCEDFP.
+ */
+static uint32_t rel_out_flags(const hld_link *L)
+{
+    uint32_t f = EF_IA_64_BE | EF_IA_64_ABI64
+               | (L->trapnil ? EF_IA_64_TRAPNIL : 0);
+
+    if (!L->kmod_target) return f | L->rflags;
+    f |= EF_IA_64_NOFUNCDESC_CONS_GP | EF_IA_64_ABSOLUTE
+       | (L->rflags & EF_IA_64_ARCH);
+    if (L->kmod_target == 1131) f |= EF_IA_64_REDUCEDFP;
+    return f;
 }
 
 static int is_shtmod(const char *name)
@@ -1001,8 +1038,7 @@ int hld_write_rel(hld_link *L)
     st16(img + 18, EM_IA_64);
     st32(img + 20, EV_CURRENT);
     st64(img + 40, shoff);
-    st32(img + 48, EF_IA_64_BE | EF_IA_64_ABI64 | L->rflags
-                   | (L->trapnil ? EF_IA_64_TRAPNIL : 0));
+    st32(img + 48, rel_out_flags(L));
     st16(img + 52, EHDR64_SIZE);
     st16(img + 54, PHDR64_SIZE);
     st16(img + 58, SHDR64_SIZE);
@@ -1077,8 +1113,7 @@ int hld_write_rel(hld_link *L)
     if (L->verbose)
         fprintf(stderr, "hld: -r: %u sections, %lu symbols (%u local), "
                 "e_flags 0x%x\n", (unsigned)nsec, (unsigned long)nsym,
-                (unsigned)nlocal, (unsigned)(EF_IA_64_BE | EF_IA_64_ABI64
-                | L->rflags | (L->trapnil ? EF_IA_64_TRAPNIL : 0)));
+                (unsigned)nlocal, (unsigned)rel_out_flags(L));
     rc = 0;
     goto done;
 

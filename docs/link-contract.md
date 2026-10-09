@@ -75,6 +75,7 @@ details and the evidence are in `docs/kernel-modules.md`.
 | duplicate strong definitions | an error (`Duplicate symbol "x" in files a.o and b.o`); same-named locals are fine |
 | `-b`, `-e`, `+h`, `+b`, `+e`, `-B symbolic`, `-m` | hld refuses them with `-r`: they describe a loadable image |
 | `--kernel-module` | hld only: emit `.shtmod` as SHT_MOD, and refuse what the module loader cannot load (see `docs/kernel-modules.md`) |
+| `--kernel-module=11.23\|11.31` | hld only: as above, and give the output that release's kernel e_flags (0x198 / 0x1b8); every input must have NOFUNCDESC_CONS_GP |
 
 HP's linker writes its output even when it reports an error (exit 1). hld
 does not write one when the link fails, and removes a partly written one;

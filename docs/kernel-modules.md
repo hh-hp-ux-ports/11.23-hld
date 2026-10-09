@@ -166,6 +166,28 @@ without its wrapper pointer (DIR64MSB at offset 16); no `.data.KC_META` /
 loadable module uses (GPREL64I, LTOFF64I, ... -- gp- or linkage-table-relative
 in a module that has neither), and for inputs without NOFUNCDESC_CONS_GP.
 
+### A target release: `--kernel-module=11.23` / `--kernel-module=11.31`
+
+(hld only; proposed spelling.) Everything `--kernel-module` does, plus the
+output's e_flags are that release's kernel convention regardless of the
+inputs: **0x198** for 11.23 (what its HP cc kernel objects carry) and
+**0x1b8** for 11.31 (`+kernel`, and every module in `/usr/conf/mod`). This is
+what lets gcc objects become a module without a binary post-pass: GNU as
+`-mauto-pic` writes 0x98, it cannot spell ABSOLUTE or REDUCEDFP, and HP ld
+refuses 0x98 next to 11.31's 0x1b8 ("Mismatched REDUCEDFP").
+
+The flags are asserted only where they can be backed:
+
+- every input must already have NOFUNCDESC_CONS_GP (0x80) -- an object built
+  with function descriptors and its own gp is not kernel code, and hld
+  refuses it naming the file, rather than relabel it;
+- the REDUCEDFP mismatch HP ld refuses is not checked between inputs;
+  instead, for 11.31, the code itself is checked (below);
+- ABSOLUTE is backed by the relocation check: a module with no gp-relative
+  or linkage-table relocation addresses its data absolutely;
+- the inputs' CONS_GP bit and anything else are not carried; the
+  architecture byte is.
+
 ### Compared with HP ld -r on real modules
 
 `build/hld-objcmp` compares two relocatable objects by contract (sections,

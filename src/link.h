@@ -345,6 +345,12 @@ typedef struct {
      */
     int relocatable;
     int kmod_check;           /* --kernel-module: refuse what the loader does */
+    /*
+     * --kernel-module=11.23 or =11.31: the release the module is for, 1123
+     * or 1131; 0 when none was named. Naming one makes the output carry
+     * that release's kernel e_flags whatever the inputs say.
+     */
+    int kmod_target;
     uint32_t rflags;          /* code-model e_flags, from the first input */
     const char *rflags_from;  /* that input, for the diagnostic */
     hld_gsym *rsyms, **rsyms_tail;   /* globals in first-seen order */
