@@ -265,7 +265,15 @@ static int collect_sections_of(hld_link *L, hld_elf *e)
             else if (strncmp(sh->name, ".IA_64.unwind_info", 18) == 0)
                 oname = ".IA_64.unwind_info";
 
-            o = osec_get(L, oname, sh->type, sh->flags);
+            /*
+             * Output flags are the OR of the inputs', so one input carrying
+             * HP's COMDAT mark used to mark the whole output section: every
+             * symbol a library defined in its .text then read as UNDEFINED
+             * to HP's linker, which could not link against the library at
+             * all. The mark asks for one copy of an input section to be
+             * kept; it says nothing about the output.
+             */
+            o = osec_get(L, oname, sh->type, sh->flags & ~(uint64_t)SHF_HP_COMDAT);
             if (!o) { lerr(L, "out of memory", NULL, NULL); return -1; }
             if (sh->addralign > o->align) o->align = sh->addralign;
             if (sh->entsize && !o->entsize) o->entsize = sh->entsize;

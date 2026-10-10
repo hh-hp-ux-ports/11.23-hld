@@ -392,15 +392,22 @@ int hld_archive_search(hld_link *L, hld_archive *ar, int *extracted_any)
 }
 
 /*
- * HP's linker resolves the compiler's millicode helpers from an archive it
+ * HP's linker resolves the compiler's millicode helpers from archives it
  * knows about without being told, so a plain `cc a.c b.c` links. Anything
  * still undefined once the command line is exhausted gets one last look
  * there, which keeps hld a drop-in for that behaviour.
+ *
+ * TWO archives, measured on 11.23 with ld -v: libcres.a, then milli.a, both
+ * searched at the end of every program and shared-library link -- even one
+ * that names no -lc -- and neither for -r. Only milli.a is in the man page,
+ * and searching it alone missed __milli_strlen, which aCC emits for
+ * strlen and which only libcres.a defines: every aCC program touching a
+ * string failed to link.
  */
 int hld_link_millicode(hld_link *L)
 {
     static const char *const paths[] = {
-        "/usr/lib/hpux64/milli.a", NULL
+        "/usr/lib/hpux64/libcres.a", "/usr/lib/hpux64/milli.a", NULL
     };
     const char *const *p;
     unsigned h;
@@ -415,6 +422,7 @@ int hld_link_millicode(hld_link *L)
             }
     if (!wanted) return 0;
 
+    /* each in turn -- stopping at the first that exists was the bug */
     for (p = paths; *p; p++) {
         FILE *f = fopen(*p, "rb");
         hld_archive *ar;
@@ -422,9 +430,9 @@ int hld_link_millicode(hld_link *L)
         fclose(f);
         if (hld_archive_open(L, *p, &ar) < 0) {
             L->err[0] = 0;          /* not fatal: it was only a guess */
-            return 0;
+            continue;
         }
-        return hld_archive_search(L, ar, NULL);
+        if (hld_archive_search(L, ar, NULL) < 0) return -1;
     }
     return 0;
 }

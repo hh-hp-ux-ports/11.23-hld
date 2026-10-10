@@ -175,6 +175,13 @@ HLD_INLINE void stle64(uint8_t *p, uint64_t v)
 #define SHF_GROUP            0x200u
 #define SHF_TLS              0x400u
 #define SHF_IA_64_SHORT      0x10000000u /* gp-addressed: .sdata/.sbss/.dlt/.plt */
+/*
+ * HP's COMDAT mark (the same value binutils gives it for PA, include/elf/
+ * hppa.h): aCC sets it on each section holding a template or inline
+ * instantiation, for the linker to keep one copy of. It describes an INPUT
+ * section and must not reach an output one -- see collect_sections_of().
+ */
+#define SHF_HP_COMDAT     0x08000000u
 
 /* special section indexes */
 #define SHN_UNDEF  0
