@@ -309,6 +309,12 @@ Neither output has been loaded by a kernel; see "Open" below.
 - **`PCREL21B` in a module** (gcc's call form) -- settled for 11.23: gcc-built
   gvtape modules load and run once their MLX relocations are on slot 2, so
   the loader handles gcc's calls.
+- **A gcc module with hld alone -- settled for 11.23 (2026-10-10).** gcc
+  4.7.4's gvtape objects, unmodified, linked with
+  `hld -r --kernel-module=11.23` and no post-pass of any kind: loads,
+  passes a tar round trip through the driver and unloads, beside the HP
+  cc + HP ld control. hld moved its 40 IMM64 relocations to slot 2, and the
+  output is byte-identical to the earlier post-passed build.
 - **Decisions for the project owner**, all currently resolved the
   conservative way:
   - should plain `-r` emit SHT_MOD for `.shtmod` too? Now only
