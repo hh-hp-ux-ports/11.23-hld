@@ -829,6 +829,132 @@ CEOF
     fi
 fi
 
+# --- C++ across a library boundary: one typeinfo per process -------------
+# A class whose virtual functions are all inline has no home object, so the
+# compiler emits its typeinfo in EVERY object that uses it -- gcc as a weak
+# symbol, aCC as a HP COMDAT one. The loader then has to pick one copy for
+# the whole process, and that only works if each library refers to the
+# typeinfo BY NAME. hld used to bind a library's references to data it
+# defined itself locally, so a library threw its own copy, and the program's
+# `catch (const T&)' -- holding another -- did not recognise it: the
+# exception went uncaught. Unwinding was fine; `catch (...)' worked. The
+# platform's linker binds them by name (measured), and so must hld.
+#
+# ⚠️ Under gcc the RUN passes either way: its runtime falls back to comparing
+# type NAMES when two typeinfo addresses differ (measured -- 0.12.3 bound
+# _ZTI1E locally and the catch still worked). So for gcc the check that
+# guards the fix is the named-relocation assertion below; the run only
+# guards against breaking catching outright. aCC's runtime compares
+# addresses, and its test further down is the one that fails behaviourally.
+CXXT=
+for cand in /opt/gcc474/bin/g++ g++; do
+    if command -v "$cand" > /dev/null 2>&1; then CXXT=$cand; break; fi
+done
+if [ -n "$CXXT" ]; then
+    mkdir -p $W/tdir $W/ti
+    rm -f $W/tdir/ld
+    ln -s "`pwd`/$HLD" $W/tdir/ld
+    cat > $W/ti/tilib.cc <<'CEOF'
+struct E { virtual ~E() {} virtual int code() const { return 7; } };
+void lthrow() { throw E(); }
+CEOF
+    cat > $W/ti/timain.cc <<'CEOF'
+struct E { virtual ~E() {} virtual int code() const { return 7; } };
+void lthrow();
+int main() {
+    try { lthrow(); } catch (const E &e) { return e.code() == 7 ? 0 : 1; }
+    return 2;
+}
+CEOF
+    CHECKS=`expr $CHECKS + 1`
+    if $CXXT -mlp64 -fPIC -c $W/ti/tilib.cc -o $W/ti/tilib.o 2> $W/ti.err &&
+       $CXXT -mlp64 -c $W/ti/timain.cc -o $W/ti/timain.o 2>> $W/ti.err &&
+       $CXXT -mlp64 -shared -B$W/tdir/ -o $W/ti/libti.so $W/ti/tilib.o 2>> $W/ti.err &&
+       $CXXT -mlp64 -B$W/tdir/ -o $W/ti/tiprog $W/ti/timain.o -L$W/ti -lti \
+           2>> $W/ti.err; then
+        CHECKS=`expr $CHECKS + 1`
+        ( ulimit -t 30; SHLIB_PATH=$W/ti $W/ti/tiprog ) > $W/ti.out 2>&1
+        rc=$?
+        if [ $rc -ne 0 ]; then
+            echo "FAIL: a type thrown in a shared library was not caught by type"
+            echo "      in the program (exit $rc)"; cat $W/ti.out
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        n=`$RE -r $W/ti/libti.so 2>/dev/null | grep -c "DIR64MSB.*_ZTI1E"`
+        if [ "$n" -lt 1 ]; then
+            echo "FAIL: the library does not refer to E's typeinfo by name"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: building the cross-library typeinfo test:"; cat $W/ti.err
+        FAIL=1
+    fi
+fi
+
+# --- C++ from the vendor compiler, linked through aCC itself ---------------
+# aCC drives the linker as `ld -u___exit -umain ... -lstd_v2 -lCsup ... -lc'
+# with no -L for its runtime, calls millicode only libcres.a defines, marks
+# template instantiations HP COMDAT, and emits a typeinfo copy per object.
+# Each of those stopped hld once. The library half matters most: the
+# platform's linker must be able to link against what hld built, and an
+# exception thrown inside it must be caught by type in the program.
+if [ -x /opt/aCC/bin/aCC ]; then
+    ACC="/opt/aCC/bin/aCC +DD64 -AA"
+    HLDA=`pwd`/$HLD
+    X=$W/acx
+    mkdir -p $X
+    cat > $X/io.cc <<'CEOF'
+#include <iostream>
+int main() { std::cout << "hello from aCC" << std::endl; return 0; }
+CEOF
+    cat > $X/xlib.cc <<'CEOF'
+#include <stdexcept>
+void xthrow() { throw std::logic_error("from-lib"); }
+CEOF
+    cat > $X/xmain.cc <<'CEOF'
+#include <cstdio>
+#include <stdexcept>
+void xthrow();
+int main() {
+    try { xthrow(); } catch (const std::logic_error &e) { std::printf("caught %s\n", e.what()); return 0; }
+    return 1;
+}
+CEOF
+    CHECKS=`expr $CHECKS + 1`
+    if ( cd $X && $ACC -o io io.cc -tl,$HLDA ) > $X/io.err 2>&1; then
+        CHECKS=`expr $CHECKS + 1`
+        got=`$X/io 2>&1`
+        [ "$got" = "hello from aCC" ] || {
+            echo "FAIL: aCC iostream program linked by hld printed: $got"; FAIL=1; }
+    else
+        echo "FAIL: aCC could not link an iostream program with hld:"; cat $X/io.err
+        FAIL=1
+    fi
+    CHECKS=`expr $CHECKS + 1`
+    if ( cd $X && $ACC +Z -c xlib.cc && $ACC -c xmain.cc &&
+         $ACC -b -o libx.so xlib.o -tl,$HLDA ) > $X/x.err 2>&1; then
+        # the platform's linker links against it, and so does hld
+        for who in hp hld; do
+            CHECKS=`expr $CHECKS + 1`
+            case $who in hp) tl= ;; hld) tl=-tl,$HLDA ;; esac
+            if ( cd $X && $ACC -o xp_$who xmain.o libx.so $tl ) \
+                    > $X/xl_$who.err 2>&1; then
+                CHECKS=`expr $CHECKS + 1`
+                got=`( ulimit -t 30; SHLIB_PATH=$X $X/xp_$who 2>&1 )`
+                [ "$got" = "caught from-lib" ] || {
+                    echo "FAIL: exception from an hld-built aCC library, program by $who: $got"
+                    FAIL=1; }
+            else
+                echo "FAIL: $who could not link against an hld-built aCC library:"
+                head -5 $X/xl_$who.err; FAIL=1
+            fi
+        done
+    else
+        echo "FAIL: building the aCC library test:"; cat $X/x.err; FAIL=1
+    fi
+fi
+
 # --- C++: exceptions, iostreams, and another module's data ----------------
 # A C++ program reads the C library's own data — the FILE table behind
 # stdout, the ctype masks, errno — both through linkage-table slots and

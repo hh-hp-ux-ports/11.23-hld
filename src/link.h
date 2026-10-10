@@ -91,7 +91,7 @@ typedef struct hld_gsym {
     uint8_t type, bind, other;
     uint8_t has_plt;          /* an import we call: has a descriptor + stub */
     uint8_t export_named;     /* named by +e/+ee: export even under a list */
-    uint8_t interposable;     /* exported from a library and called: via a stub */
+    uint8_t interposable;     /* library symbol another module may supply: bound by name */
     int short_common;         /* COMMON belongs in the short bss (.sbss) */
     isec *in;                 /* defining input section (DEFINED) */
     uint64_t in_off;          /* offset within that input section */

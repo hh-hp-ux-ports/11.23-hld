@@ -694,8 +694,19 @@ int hld_fill_dynamic(hld_link *L)
             int tls_slot = (l->kind == HLD_DLT_TPREL
                             || l->kind == HLD_DLT_DTPMOD
                             || l->kind == HLD_DLT_DTPREL);
+            /*
+             * A slot holding the address of a VARIABLE this library exports
+             * is bound by name too, as the platform's linker does: anchored,
+             * it would hand out this library's own copy while the rest of
+             * the process uses the one the loader chose (see the scan).
+             * dynidx is 0 for a hidden or +e-excluded symbol, and that one
+             * has nothing to name, so it stays anchored.
+             */
+            int named_data = l->g && l->kind == HLD_DLT_PLAIN
+                             && l->g->interposable && l->g->dynidx
+                             && l->g->type != STT_FUNC;
             if (!l->g
-                || (!tls_slot
+                || (!tls_slot && !named_data
                     && l->g->kind != HLD_SYM_IMPORT
                     && !(l->g->has_plt && l->kind == HLD_DLT_FPTR))) {
                 uint64_t a;

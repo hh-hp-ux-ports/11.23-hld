@@ -1293,9 +1293,26 @@ int hld_alloc_linkage(hld_link *L)
                  * reach the same one or a function ends up with two
                  * addresses in one process.
                  */
-                if ((want_call || want_opd || want_ipltd) && L->shared
-                    && !L->bsymbolic
-                    && g && g->kind == HLD_SYM_DEFINED)
+                /*
+                 * The same holds for DATA: a word or linkage-table slot that
+                 * holds the address of a variable this library exports must
+                 * be bound by name, so that every module in the process
+                 * reaches the one definition the loader chose. HP's linker
+                 * does exactly this (measured: `int *gptr = &gvar' in a
+                 * library becomes DIR64MSB against gvar, a static stays
+                 * anchored). It is what makes C++ work across a library
+                 * boundary: aCC emits a copy of a type's typeinfo in every
+                 * object that throws or catches it, and a library bound to
+                 * its own copy throws a type the program's catch does not
+                 * recognise. Thread-local slots are another matter and are
+                 * left as they are; code reaching the variable gp-relatively
+                 * cannot be redirected by any linker.
+                 */
+                if (L->shared && !L->bsymbolic
+                    && g && g->kind == HLD_SYM_DEFINED
+                    && ((want_call || want_opd || want_ipltd)
+                        || ((want_dyn || want_dlt)
+                            && (g->type == STT_OBJECT || g->type == STT_NOTYPE))))
                     g->interposable = 1;
                 if (want_call) continue;
                 if (want_dyn && hld_dynrel_type(L, g, r->type, &dtype)) {
