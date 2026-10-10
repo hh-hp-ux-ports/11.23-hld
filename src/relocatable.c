@@ -563,6 +563,69 @@ static int kmod_seen(uint32_t t)
 }
 
 /*
+ * The relocation types whose field is the long immediate an MLX bundle
+ * splits across its L and X slots: movl's 64-bit immediate, brl's target.
+ */
+static int is_mlx_reloc(uint32_t t)
+{
+    switch (t) {
+    case R_IA64_IMM64:
+    case R_IA64_GPREL64I: case R_IA64_LTOFF64I: case R_IA64_PLTOFF64I:
+    case R_IA64_FPTR64I: case R_IA64_LTOFF_FPTR64I:
+    case R_IA64_PCREL64I: case R_IA64_TPREL64I: case R_IA64_DTPREL64I:
+    case R_IA64_PCREL60B:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/*
+ * Where the module loader looks for an MLX-form relocation: slot 2.
+ *
+ * An MLX instruction occupies slots 1 and 2 together, and the two
+ * assemblers disagree about which of them a relocation names -- HP's as
+ * says slot 2 (r_offset ends in 2), GNU as says slot 1. Linkers accept
+ * either. The HP-UX module loader accepts only slot 2, on 11.23 and 11.31
+ * alike, and given slot 1 it patches the wrong bits and the kernel panics
+ * when the module first touches the address (measured: the same module
+ * with only its IMM64 r_offsets moved between slots loads or panics). So
+ * under --kernel-module every such relocation leaves on slot 2.
+ *
+ * The bundle is checked rather than trusted: one that is not MLX cannot
+ * hold the instruction the relocation describes, and guessing which slot
+ * was meant would hand the loader something it patches wrongly anyway.
+ */
+static int kmod_mlx_slot(hld_link *L, const isec *in, const hld_rela *r,
+                         uint64_t *roff)
+{
+    uint64_t bundle = r->offset & ~(uint64_t)15;
+    unsigned slot = (unsigned)(r->offset & 15), tmpl;
+    const char *tn = hld_reloc_name(r->type);
+    const uint8_t *code;
+    char err[HLD_ERRSZ];
+
+    code = hld_sec_data(in->obj, in->sh, err);
+    if (!code || bundle + 16 > in->sh->size) {
+        snprintf(L->err, HLD_ERRSZ, "%s: %s+0x%llx: %s lies outside its "
+                 "section's code", in->obj->path, in->sh->name,
+                 (unsigned long long)r->offset, tn ? tn : "relocation");
+        return -1;
+    }
+    tmpl = code[bundle] & 0x1f;
+    if ((tmpl & 0x1e) != 0x04 || (slot != 1 && slot != 2)) {
+        snprintf(L->err, HLD_ERRSZ, "%s: %s+0x%llx: %s on slot %u of a "
+                 "bundle with template 0x%02x, which is not the MLX form it "
+                 "describes -- the module loader would patch the wrong bits",
+                 in->obj->path, in->sh->name, (unsigned long long)r->offset,
+                 tn ? tn : "relocation", slot, tmpl);
+        return -1;
+    }
+    *roff = bundle + 2;
+    return 0;
+}
+
+/*
  * The function an offset in an input section belongs to, for a diagnostic
  * a person can act on: "in vt_claim+0x40" rather than ".text+0x1e2".
  */
@@ -724,6 +787,7 @@ int hld_write_rel(hld_link *L)
     hld_gsym *g;
     unsigned h;
     kmod_tally kt;
+    unsigned long nmoved = 0;   /* MLX relocations moved to slot 2 */
     FILE *f;
     int rc = -1;
 
@@ -1021,7 +1085,7 @@ int hld_write_rel(hld_link *L)
                     const hld_rela *r = &rel[k];
                     uint8_t *p = relbuf[i] + relfill[i] * RELA64_SIZE;
                     uint32_t sym = 0;
-                    uint64_t adj = 0;
+                    uint64_t adj = 0, roff;
 
                     if (r->sym) {
                         if (r->sym >= maps[mi].n || !maps[mi].idx[r->sym]) {
@@ -1043,7 +1107,15 @@ int hld_write_rel(hld_link *L)
                         }
                         kmod_note(&kt, in, r, nm, r->addend + (int64_t)adj);
                     }
-                    st64(p + 0, in->out_off + r->offset);
+                    roff = r->offset;
+                    if (L->kmod_check && is_mlx_reloc(r->type)) {
+                        if (kmod_mlx_slot(L, in, r, &roff) < 0) {
+                            free(rel);
+                            goto done;
+                        }
+                        if (roff != r->offset) nmoved++;
+                    }
+                    st64(p + 0, in->out_off + roff);
                     st64(p + 8, ELF64_R_INFO(sym, r->type));
                     st64(p + 16, (uint64_t)r->addend + adj);
                     relfill[i]++;
@@ -1245,6 +1317,10 @@ int hld_write_rel(hld_link *L)
         fprintf(stderr, "hld: -r: %u sections, %lu symbols (%u local), "
                 "e_flags 0x%x\n", (unsigned)nsec, (unsigned long)nsym,
                 (unsigned)nlocal, (unsigned)rel_out_flags(L));
+    if (L->verbose && nmoved)
+        fprintf(stderr, "hld: --kernel-module: %lu MLX relocation(s) moved "
+                "from slot 1 to slot 2, where the module loader reads them\n",
+                nmoved);
     rc = 0;
     goto done;
 

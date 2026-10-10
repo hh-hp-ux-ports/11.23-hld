@@ -157,9 +157,11 @@ does, `.shtmod` included; `--kernel-module` (hld only) is the module mode.
 | non-loaded section order | HP's own (`.note` first) | first seen | order carries no meaning |
 | symbol order | locals as HP; globals in HP's hash order | locals as HP; globals first seen | consumers look symbols up by name or index from the relocations |
 | output on error | written, exit 1 | not written (a partial one removed), exit 1 | callers go by the exit status |
+| MLX relocation slot (IMM64, the `64I` types, PCREL60B) | as assembled: HP as slot 2, GNU as slot 1 | the same with `-r`; **slot 2 with `--kernel-module`** | the module loader reads slot 2 only; given slot 1 it patches the wrong bits and the kernel panics at load (below) |
 
-`--kernel-module` (hld only) emits `.shtmod` as SHT_MOD and refuses, after an
-otherwise successful `-r`: a relocation type the loader's dispatch does not
+`--kernel-module` (hld only) emits `.shtmod` as SHT_MOD, puts every MLX-form
+relocation on slot 2 (next section), and refuses, after an otherwise
+successful `-r`: a relocation type the loader's dispatch does not
 process (list above), and a call to `__milli*` -- each one named by object,
 input section, offset, enclosing function and symbol, e.g.
 `g1.o: .text+0x50 (g1_entry+0x50): R_IA64_LTOFF22X against `ext_var'+0`,
@@ -169,6 +171,32 @@ without its wrapper pointer (DIR64MSB at offset 16); no `.data.KC_META` /
 `.data.KC_META_PTR`. It warns for a type the dispatch accepts but no shipped
 loadable module uses (GPREL64I, LTOFF64I, ... -- gp- or linkage-table-relative
 in a module that has neither), and for inputs without NOFUNCDESC_CONS_GP.
+
+### MLX relocations: slot 2
+
+An MLX bundle's long immediate (`movl`, `brl`) spans slots 1 and 2, and the
+assemblers disagree about which one its relocation names: HP as writes
+r_offset ending in 2, GNU as in 1. Linkers accept either. **The HP-UX module
+loader accepts only slot 2**, on 11.23 and 11.31 alike. Given slot 1 it
+patches the wrong bits, and the kernel takes a Data TLB fault in the
+module's code at load (`post_hndlr(): Unresolved kernel interruption`,
+from `mod_load_helper`). Measured by load tests on throwaway 11.23 and
+11.31 systems (2026-10-10), each a clean A/B in which only the r_offsets
+differ:
+
+- 11.23: a gcc-built gvtape (40 IMM64 on slot 1) panics; the same file with
+  them moved to slot 2 loads, passes a tar round trip through the driver
+  and unloads.
+- 11.31: HP cc's own 11.31 gvtape (45 IMM64 on slot 2) loads; the same file
+  with them moved to slot 1 panics.
+
+So with `--kernel-module`, every relocation of type IMM64, GPREL64I,
+LTOFF64I, PLTOFF64I, FPTR64I, LTOFF_FPTR64I, PCREL64I, TPREL64I, DTPREL64I
+or PCREL60B leaves on slot 2. The bundle is read first: if its template is
+not MLX, or the relocation names slot 0, the link is refused, since no slot
+would be right. Plain `-r` passes slot 1 through, as HP ld -r does -- which
+is why a gcc module linked by HP ld -r panics too. Only IMM64 has been
+exercised in a running kernel; the other types follow the same encoding.
 
 ### A target release: `--kernel-module=11.23` / `--kernel-module=11.31`
 
@@ -270,19 +298,17 @@ Neither output has been loaded by a kernel; see "Open" below.
 
 ## Open
 
-- **11.31 modes are measured on 11.23 only.** 0x1b8 and the f6-f11 rule
+- **11.31 modes are measured on 11.23 only**, apart from the MLX slot rule,
+  which was load-tested on 11.31 too (above). 0x1b8 and the f6-f11 rule
   come from 11.23's shipped modules (all 0x1b8) and the parallel work's
-  11.31 notes; no 11.31 module has been linked with hld or compared.
-- **A real load.** The comparison proves hld -r's output says the same thing
-  as HP's, which loads; it does not prove the loader agrees. The test: on a
-  throwaway 11.23 guest, install hld's `gvtape` (built with
-  `hld -r --kernel-module`, no patch step) in place of HP's and run the
-  gvtape smoke test (`kcmodule -B gvtape=loaded`, `lsdev`, `dd`/`mt`
-  through `/dev/rmt/gvt0m*`, unload). Expected differences visible to the
-  loader: none besides the `.note`/`.comment` sizes.
-- **`PCREL21B` in a module** (gcc's call form): absent from every shipped
-  loadable module; the loader's dispatch sends it to PCREL21BI's handler
-  (static reading). A gcc-built module's load test settles it.
+  11.31 notes; no 11.31 module has been linked with hld and loaded.
+- **A real load -- settled for 11.23 (2026-10-10).** HP cc's gvtape linked
+  with `hld -r --kernel-module=11.23`, no patch step, loads
+  (`kcmodule -B`), passes a tar round trip through the driver and unloads,
+  as the HP ld -r control does.
+- **`PCREL21B` in a module** (gcc's call form) -- settled for 11.23: gcc-built
+  gvtape modules load and run once their MLX relocations are on slot 2, so
+  the loader handles gcc's calls.
 - **Decisions for the project owner**, all currently resolved the
   conservative way:
   - should plain `-r` emit SHT_MOD for `.shtmod` too? Now only
@@ -291,8 +317,10 @@ Neither output has been loaded by a kernel; see "Open" below.
     cannot collide with an HP `+` option); and whether a bare
     `--kernel-module` should default to a release -- now it does not, and
     keeps the inputs' flags combined as HP ld -r combines them;
-  - whether a 0x98 module (gcc, no ABSOLUTE) loads as it is: untested, so
-    the release modes write 0x198/0x1b8 as HP's compilers do.
+  - whether a 0x98 module (gcc, no ABSOLUTE) loads as it is: on 11.23 it
+    does (load-tested 2026-10-10), so the 11.23 loader does not require
+    ABSOLUTE; the release modes still write 0x198/0x1b8, as HP's compilers
+    do.
 - **11.31.** Not measured: its modules are 0x1b8 too, and its `.HP.opt_annot`
   may carry an `sh_info`, which hld -r refuses rather than carries.
 - **SHT_GROUP / COMDAT** inputs are refused by `-r` (C kernel code has none).

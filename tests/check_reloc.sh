@@ -225,7 +225,8 @@ must_fail kmod_needs_r "with -r" --kernel-module -o $W/x.o $F/tkm_body.o
 # A gcc/GNU-as object (0x98: no ABSOLUTE, no REDUCEDFP -- GNU as cannot
 # spell them) with HP-as KC_META and .shtmod (0x198). Plain -r ors them to
 # 0x198; --kernel-module=11.23 must give 0x198 and =11.31 0x1b8, with
-# nothing but e_flags (and the SHT_MOD type) differing from plain -r.
+# nothing but e_flags, the SHT_MOD type and the IMM64's slot differing from
+# plain -r: GNU as puts movl's IMM64 on slot 1, the loader reads slot 2.
 G=tests/obj/km_gnu.o
 CHECKS=`expr $CHECKS + 1`
 if $HLD -r -o $W/km_plain.o $G $F/tkm_meta.o $F/tkm_shtmod.o \
@@ -238,14 +239,23 @@ for rel in 11.23 11.31; do
     if $HLD -r --kernel-module=$rel -o $W/km_$rel.o $G $F/tkm_meta.o \
             $F/tkm_shtmod.o > $W/km_$rel.err 2>&1; then
         $CMP -x .comment $W/km_plain.o $W/km_$rel.o > $W/km_$rel.cmp 2>&1
+        # the IMM64 leaves slot 1 (+0x1) for slot 2 (+0x2), and nothing else
+        # about the relocations changes
+        if grep "only in $W/km_plain.o: +0x1 R_IA64_IMM64" $W/km_$rel.cmp \
+                > /dev/null && grep "only in $W/km_$rel.o: +0x2 R_IA64_IMM64" \
+                $W/km_$rel.cmp > /dev/null; then :; else
+            fail "km $rel: the IMM64 did not move from slot 1 to slot 2:"
+            cat $W/km_$rel.cmp
+        fi
         if [ "$rel" = 11.23 ]; then
-            grep "^1 difference" $W/km_$rel.cmp > /dev/null \
-                || fail "km $rel: more than .shtmod's type changed:" \
-                        "`cat $W/km_$rel.cmp`"
+            grep "^3 difference" $W/km_$rel.cmp > /dev/null \
+                || fail "km $rel: more changed than .shtmod's type and the" \
+                        "IMM64's slot: `cat $W/km_$rel.cmp`"
         elif grep "^header: e_flags 0x198 vs $want$" $W/km_$rel.cmp \
-                > /dev/null && grep "^2 difference" $W/km_$rel.cmp \
+                > /dev/null && grep "^4 difference" $W/km_$rel.cmp \
                 > /dev/null; then :; else
-            fail "km $rel: expected e_flags $want and .shtmod's type only:"
+            fail "km $rel: expected e_flags $want, .shtmod's type and the" \
+                 "IMM64's slot only:"
             cat $W/km_$rel.cmp
         fi
         $RE -h $W/km_$rel.o > $W/km_$rel.h
@@ -255,6 +265,54 @@ for rel in 11.23 11.31; do
         fail "km $rel: hld -r --kernel-module=$rel failed:"; cat $W/km_$rel.err
     fi
 done
+# Every long-immediate (MLX) relocation must leave --kernel-module on slot 2:
+# the 11.23 and 11.31 module loaders read only that one, and a module whose
+# IMM64 names slot 1 -- GNU as's choice -- panics the kernel at load
+# (measured on both releases). Any spelling of the option, every MLX type.
+for opt in --kernel-module --kernel-module=11.23 --kernel-module=11.31; do
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -r $opt -o $W/mlx.o $G $F/tkm_meta.o $F/tkm_shtmod.o \
+            > $W/mlx.err 2>&1; then
+        CHECKS=`expr $CHECKS + 1`
+        bad=`$RE -r $W/mlx.o 2>/dev/null |
+             awk '$2 ~ /IMM64|64I$|PCREL60B/ && $1 ~ /1$/ {print $1, $2}'`
+        n2=`$RE -r $W/mlx.o 2>/dev/null |
+            awk '$2 ~ /IMM64/ && $1 ~ /2$/' | wc -l | tr -d ' '`
+        if [ -n "$bad" ]; then
+            fail "$opt left an MLX relocation on slot 1: $bad"
+        elif [ "$n2" -lt 1 ]; then
+            fail "$opt: km_gnu.o's IMM64 is missing from the output"
+        fi
+    else
+        fail "$opt with gcc's IMM64 failed:"; cat $W/mlx.err
+    fi
+done
+
+# An MLX relocation in a bundle that is not MLX cannot be put right by
+# picking a slot; it is refused. km_gnu.o's first bundle is its movl's, so
+# a copy with only that template flipped from MLX (0x04/0x05) to MII
+# (0x00/0x01) keeps its IMM64 on slot 1 of a bundle that cannot hold one.
+# The template is checked first, so this cannot pass by patching the wrong
+# byte.
+CHECKS=`expr $CHECKS + 1`
+cp $G $W/notmlx.o
+toff=`$RE -S $W/notmlx.o 2>/dev/null | awk '/ \.text /{print $6; exit}'`
+tb=`dd if=$W/notmlx.o bs=1 skip=$((0x$toff)) count=1 2>/dev/null |
+    od -An -tu1 | tr -d ' \n'`
+if [ -n "$tb" ] && [ $(( tb & 30 )) -eq 4 ]; then
+    printf "\\`printf '%03o' $(( tb ^ 4 ))`" |
+        dd of=$W/notmlx.o bs=1 seek=$((0x$toff)) conv=notrunc 2>/dev/null
+    must_fail kmod_not_mlx "not the MLX form" -r --kernel-module=11.23 \
+        -o $W/x.o $W/notmlx.o $F/tkm_meta.o $F/tkm_shtmod.o
+    # and plain -r still takes it: only the module mode reads the bundle
+    CHECKS=`expr $CHECKS + 1`
+    $HLD -r -o $W/x.o $W/notmlx.o > $W/nm.err 2>&1 ||
+        { fail "plain -r refused the non-MLX copy:"; cat $W/nm.err; }
+else
+    fail "km_gnu.o's first bundle is not MLX (template byte '$tb'), so the" \
+         "non-MLX refusal cannot be tested"
+fi
+
 # 11.31's REDUCEDFP is a promise about the code: f0, f1, f6-f11 only. hld
 # checks it instruction by instruction when it makes the promise. fp_wide
 # breaks it nine times, in nine formats; each must be named, by object,
