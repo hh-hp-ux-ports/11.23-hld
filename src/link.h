@@ -331,6 +331,15 @@ typedef struct {
     osec *pltsec, *reladynsec, *stubsec;
     char **libpaths;
     size_t nlibpaths, libpaths_cap;
+    /*
+     * Where -l looks after the -L list: LPATH's directories when it is set,
+     * otherwise the platform's two defaults. Kept apart from libpaths
+     * because the run path records them differently -- see dynamic.c.
+     */
+    char **deflibpaths;
+    size_t ndeflibpaths, deflibpaths_cap;
+    char *lpath_buf;          /* LPATH, split in place; owns those strings */
+    int lpath_set;
     char *dynstr;
     size_t dynstr_len, dynstr_cap;
     uint32_t ndynsym, nbucket, ndyntags, nphdr;
@@ -395,6 +404,7 @@ int  hld_link_millicode(hld_link *L);
 /* dynamic.c */
 int  hld_add_dso(hld_link *L, const char *path);
 int  hld_add_libpath(hld_link *L, const char *dir);
+int  hld_init_libpaths(hld_link *L);
 int  hld_add_rpath(hld_link *L, const char *dir);
 int  hld_add_export(hld_link *L, const char *name);
 int  hld_apply_exports(hld_link *L);

@@ -55,7 +55,9 @@ static const char *const hld_shared_forms[] = {
  * index them as one sequence rather than walking two vectors twice.
  */
 #define RPATH_NTH(L, k, ndef) \
-    ((k) < (L)->nrpaths ? (L)->rpaths[(k)] : (L)->libpaths[(k) - (L)->nrpaths])
+    ((k) < (L)->nrpaths ? (L)->rpaths[(k)] \
+     : (k) - (L)->nrpaths < (L)->nlibpaths ? (L)->libpaths[(k) - (L)->nrpaths] \
+     : (L)->deflibpaths[(k) - (L)->nrpaths - (L)->nlibpaths])
 
 /*
  * Is this import something we call? Only a function gets a descriptor and a
@@ -159,7 +161,7 @@ int hld_alloc_dynamic(hld_link *L)
     lnkent *l;
     uint64_t nimp = 0;
     uint64_t niplt = 0;
-    size_t dn;
+    size_t dn, ndefrec;
 
     if (!L->dynamic) return 0;
 
@@ -286,8 +288,16 @@ int hld_alloc_dynamic(hld_link *L)
      * +b names a directory explicitly, ahead of those defaults;
      * +nodefaultrpath suppresses them, as it does there.
      */
-    if (L->nrpaths || (!L->no_runpath && L->nlibpaths)) {
-        size_t ndef = L->no_runpath ? 0 : L->nlibpaths;
+    /*
+     * Which of the implicit directories the run path records follows the
+     * platform's linker, measured: LPATH's directories whenever it is set;
+     * the two defaults only when there is neither LPATH nor any -L -- one
+     * -L and the defaults are still SEARCHED but no longer recorded.
+     */
+    ndefrec = L->no_runpath ? 0
+            : (L->lpath_set || !L->nlibpaths) ? L->ndeflibpaths : 0;
+    if (L->nrpaths || (!L->no_runpath && (L->nlibpaths || ndefrec))) {
+        size_t ndef = L->no_runpath ? 0 : L->nlibpaths + ndefrec;
         size_t k, n = 0, total = L->nrpaths + ndef;
         char *rp, *w;
 
@@ -1041,6 +1051,47 @@ int hld_add_libpath(hld_link *L, const char *dir)
     return dirvec_add(&L->libpaths, &L->nlibpaths, &L->libpaths_cap, dir);
 }
 
+/*
+ * Where -l searches once the -L list is exhausted, as the platform's linker
+ * does: LPATH's directories when LPATH is set -- INSTEAD of the defaults,
+ * so an LPATH without /usr/lib/hpux64 does not find libc there -- and
+ * otherwise /usr/lib/hpux64 and /opt/langtools/lib/hpux64. Measured on
+ * 11.23: HP ld finds libstd_v2 with no -L at all, and records exactly those
+ * two directories as the run path. aCC depends on this; it passes no -L for
+ * its own runtime. LP64 only, like the rest of hld.
+ */
+int hld_init_libpaths(hld_link *L)
+{
+    const char *lp = getenv("LPATH");
+    char *p, *dir;
+
+    if (lp && *lp) {
+        L->lpath_buf = malloc(strlen(lp) + 1);
+        if (!L->lpath_buf) return -1;
+        strcpy(L->lpath_buf, lp);
+        L->lpath_set = 1;
+        for (p = L->lpath_buf; p; ) {
+            dir = p;
+            p = strchr(p, ':');
+            if (p) *p++ = 0;
+            if (*dir && dirvec_add(&L->deflibpaths, &L->ndeflibpaths,
+                                   &L->deflibpaths_cap, dir) < 0) return -1;
+        }
+        return 0;
+    }
+    if (dirvec_add(&L->deflibpaths, &L->ndeflibpaths, &L->deflibpaths_cap,
+                   "/usr/lib/hpux64") < 0) return -1;
+    return dirvec_add(&L->deflibpaths, &L->ndeflibpaths, &L->deflibpaths_cap,
+                      "/opt/langtools/lib/hpux64");
+}
+
+/* The -L list, then the implicit directories: one sequence to search. */
+static const char *libdir_nth(const hld_link *L, size_t i)
+{
+    return i < L->nlibpaths ? L->libpaths[i]
+                            : L->deflibpaths[i - L->nlibpaths];
+}
+
 /* +b: a directory the loader should search, ahead of the -L defaults. */
 int hld_add_rpath(hld_link *L, const char *dir)
 {
@@ -1103,7 +1154,8 @@ int hld_find_library(hld_link *L, const char *name, hld_archive **ar_out)
     int allow_ar = (L->libmode != HLD_LIB_SHARED) || L->relocatable;
 
     if (ar_out) *ar_out = NULL;
-    for (i = 0; i < L->nlibpaths; i++) {
+    for (i = 0; i < L->nlibpaths + L->ndeflibpaths; i++) {
+        const char *ldir = libdir_nth(L, i);
         int try;
         /*
          * -a decides which kind is preferred, and whether the other kind is
@@ -1116,7 +1168,7 @@ int hld_find_library(hld_link *L, const char *name, hld_archive **ar_out)
 
             if (archive) {
                 if (!allow_ar) continue;
-                snprintf(path, sizeof path, "%s/lib%s.a", L->libpaths[i], name);
+                snprintf(path, sizeof path, "%s/lib%s.a", ldir, name);
                 f = fopen(path, "rb");
                 if (f) {
                     hld_archive *ar;
@@ -1130,7 +1182,7 @@ int hld_find_library(hld_link *L, const char *name, hld_archive **ar_out)
 
                 if (!allow_shared) continue;
                 for (fm = hld_shared_forms; *fm; fm++) {
-                    snprintf(path, sizeof path, *fm, L->libpaths[i], name);
+                    snprintf(path, sizeof path, *fm, ldir, name);
                     f = fopen(path, "rb");
                     if (f) { fclose(f); return hld_add_dso(L, path); }
                 }
@@ -1299,10 +1351,11 @@ static int add_dso(hld_link *L, const char *path, int indirect)
             size_t li;
             FILE *f;
             if (dso_loaded(L, needed[k])) continue;
-            for (li = 0; li < L->nlibpaths; li++) {
-                size_t dl = strlen(L->libpaths[li]);
+            for (li = 0; li < L->nlibpaths + L->ndeflibpaths; li++) {
+                const char *ldir = libdir_nth(L, li);
+                size_t dl = strlen(ldir);
                 if (dl + strlen(needed[k]) + 2 > sizeof p2) continue;
-                memcpy(p2, L->libpaths[li], dl);
+                memcpy(p2, ldir, dl);
                 p2[dl] = '/';
                 strcpy(p2 + dl + 1, needed[k]);
                 f = fopen(p2, "rb");

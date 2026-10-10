@@ -102,6 +102,10 @@ int main(int argc, char **argv)
     L.osec_tail = &L.osecs;
     L.out_path = "a.out";
     L.entry_name = "main";      /* HP ld's default on this platform */
+    if (hld_init_libpaths(&L) < 0) {
+        fprintf(stderr, "hld: out of memory\n");
+        return 1;
+    }
 
     /*
      * -r changes how every input is read -- each section kept under its own
@@ -249,6 +253,14 @@ int main(int argc, char **argv)
         if (strcmp(a, "-u") == 0 && i + 1 < argc) {
             /* seed an undefined symbol so archives are searched for it */
             if (hld_add_undefined(&L, argv[++i]) < 0) goto fail;
+            continue;
+        }
+        /*
+         * The same, glued: aCC drives the linker with `-u___exit -umain',
+         * and the platform's linker takes both spellings.
+         */
+        if (a[0] == '-' && a[1] == 'u' && a[2]) {
+            if (hld_add_undefined(&L, a + 2) < 0) goto fail;
             continue;
         }
         if (strcmp(a, "-z") == 0) { L.trapnil = 1; continue; }

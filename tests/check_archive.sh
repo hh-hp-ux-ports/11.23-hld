@@ -176,6 +176,37 @@ else
     FAIL=1
 fi
 
+# The same with -u glued to its symbol, as aCC drives the linker
+# (`-u___exit -umain') and as the platform's linker accepts it.
+CHECKS=`expr $CHECKS + 1`
+if $HLD -e _start -o $W/prog_ug -uonly_via_u $W/main.o -L$W -ltest \
+        2> $W/link.err; then
+    if $RE -s $W/prog_ug | grep "only_via_u" > /dev/null 2>&1; then :; else
+        echo "FAIL: -uSYM (glued) did not pull the member defining the symbol"
+        FAIL=1
+    fi
+else
+    echo "FAIL: link with -uSYM (glued):"; cat $W/link.err
+    FAIL=1
+fi
+
+# LPATH: where -l searches after the -L list, INSTEAD of the platform's
+# default directories -- so a library in an LPATH directory is found with
+# no -L at all, and one that is not there is not found.
+CHECKS=`expr $CHECKS + 1`
+if LPATH=$W $HLD -e _start -o $W/prog_lp $W/main.o -ltest 2> $W/link.err; then :
+else
+    echo "FAIL: -l did not search LPATH:"; cat $W/link.err
+    FAIL=1
+fi
+CHECKS=`expr $CHECKS + 1`
+mkdir -p $W/empty
+if LPATH=$W/empty $HLD -e _start -o $W/prog_lp2 $W/main.o -ltest \
+        > $W/lp2.err 2>&1; then
+    echo "FAIL: -ltest was found although LPATH names only an empty directory"
+    FAIL=1
+fi
+
 # An archive named before the object that needs it resolves nothing: that is
 # what strict left-to-right ordering means, and --start-group is the fix.
 CHECKS=`expr $CHECKS + 1`

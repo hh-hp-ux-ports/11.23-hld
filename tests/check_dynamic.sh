@@ -586,6 +586,48 @@ if [ -f $W/libhldtest.so ]; then
     else
         echo "FAIL: +nodefaultrpath was rejected:"; cat $W/link.err; FAIL=1
     fi
+    # With no -L and no LPATH, -l searches the platform's defaults, and the
+    # image records exactly those two -- what the platform's linker does
+    # (measured), and what aCC relies on: it passes no -L for its runtime.
+    # With a -L, the defaults are still searched but no longer recorded; with
+    # LPATH, its directories are searched and recorded instead.
+    unset LPATH
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -dynamic -e _start -o $W/defprog $W/crt_min.o $W/shmain.o \
+            $W/libhldtest.so -lc 2> $W/link.err; then
+        got=`$RE -d $W/defprog | grep RUNPATH`
+        case "$got" in
+            *"/usr/lib/hpux64:/opt/langtools/lib/hpux64"*) : ;;
+            *) echo "FAIL: with no -L, the defaults were not recorded: $got"
+               FAIL=1 ;;
+        esac
+        CHECKS=`expr $CHECKS + 1`
+        SHLIB_PATH=$ADIR $W/defprog; rc=$?
+        [ $rc -eq 7 ] || { echo "FAIL: defprog gave $rc, expected 7"; FAIL=1; }
+    else
+        echo "FAIL: -lc was not found in the default directories:"
+        cat $W/link.err; FAIL=1
+    fi
+    CHECKS=`expr $CHECKS + 1`
+    case "`$RE -d $W/rpprog | grep RUNPATH`" in
+        *langtools*) echo "FAIL: with -L given, the defaults were recorded too"
+                     FAIL=1 ;;
+    esac
+    CHECKS=`expr $CHECKS + 1`
+    if LPATH=$ADIR:/usr/lib/hpux64 $HLD -dynamic -e _start -o $W/lpprog \
+            $W/crt_min.o $W/shmain.o -lhldtest -lc 2> $W/link.err; then
+        got=`$RE -d $W/lpprog | grep RUNPATH`
+        case "$got" in
+            *"$ADIR:/usr/lib/hpux64"*)
+                case "$got" in *langtools*)
+                    echo "FAIL: LPATH set, but the defaults were recorded: $got"
+                    FAIL=1 ;; esac ;;
+            *) echo "FAIL: LPATH's directories were not recorded: $got"
+               FAIL=1 ;;
+        esac
+    else
+        echo "FAIL: -l did not search LPATH:"; cat $W/link.err; FAIL=1
+    fi
 
 # --- a library named on the command line is recorded ----------------------
 # Recording only the libraries symbols are actually drawn from is --as-needed,

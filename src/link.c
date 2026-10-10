@@ -1933,6 +1933,8 @@ void hld_link_free(hld_link *L)
     free(L->dynrels);
     free(L->coderanges);
     free(L->libpaths);
+    free(L->deflibpaths);
+    free(L->lpath_buf);
     free(L->rpaths);
     free(L->exports);
     hld_free_stubs(L);
