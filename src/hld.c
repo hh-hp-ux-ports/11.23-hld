@@ -428,6 +428,19 @@ int main(int argc, char **argv)
             hld_link_free(&L);
             return 1;
         }
+        /*
+         * --no-undefined / +noallowunsats asks for unresolved references to
+         * fail the link, and a relocatable object's are the next link's to
+         * resolve. HP ld -r accepts the option and does nothing -- measured:
+         * same output with or without it, a reference left undefined and
+         * all, and no message. Refusing it would break a command line that
+         * works with the platform's linker, so accept it as HP does, but say
+         * so: whoever wrote it expects a check that is not happening.
+         */
+        if (L.no_undefined)
+            fprintf(stderr, "hld: warning: --no-undefined/+noallowunsats has "
+                    "no effect with -r: undefined references are kept for the "
+                    "next link (HP ld -r ignores it too)\n");
         if (hld_write_rel(&L) < 0) goto fail;
         phase("write-rel");
         free(group);

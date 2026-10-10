@@ -127,6 +127,25 @@ else
     echo "note: no ar here, archive case not run"
 fi
 
+# --no-undefined / +noallowunsats: HP ld -r accepts it and does nothing, so
+# hld must too -- same output, exit 0 -- but it must not be silent about it,
+# since whoever passed it expects unresolved references to fail.
+for opt in --no-undefined +noallowunsats; do
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -r $opt -o $W/nu.o $F/pa.o > $W/nu.out 2>&1; then
+        CHECKS=`expr $CHECKS + 1`
+        if grep "no effect with -r" $W/nu.out > /dev/null 2>&1; then :; else
+            fail "$opt with -r was accepted silently:"; cat $W/nu.out
+        fi
+        $HLD -r -o $W/nu_plain.o $F/pa.o > /dev/null 2>&1
+        CHECKS=`expr $CHECKS + 1`
+        cmp -s $W/nu.o $W/nu_plain.o ||
+            fail "$opt changed what -r produced; HP ld -r's output does not change"
+    else
+        fail "$opt with -r was refused; HP ld -r accepts it:"; cat $W/nu.out
+    fi
+done
+
 # --- a kernel module --------------------------------------------------------
 # Plain -r: exactly what HP ld -r makes, .shtmod still PROGBITS.
 same_as_hp tkm_plain r_tkm.o $F/tkm_body.o $F/tkm_meta.o $F/tkm_shtmod.o
