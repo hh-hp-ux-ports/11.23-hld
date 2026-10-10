@@ -33,8 +33,10 @@ had an ia64 port, and neither lld nor mold know ia64. See `docs/gnu-ld-status.md
 - ELF64, **big-endian** (`ELFDATA2MSB`), `EM_IA_64`, `ELFOSABI_HPUX`.
 - Instruction bundles inside sections remain little-endian (ISA-fixed); all ELF
   metadata and data words are big-endian — relocation application must handle both.
-- LP64 only in v1; ILP32 (`/usr/lib/hpux32`, ELF32 MSB) is out of scope until LP64
-  works.
+- **LP64 only. Release 1.0 is the LP64 linker; ILP32 (`/usr/lib/hpux32`, ELF32 MSB)
+  is outside its scope.** hld reads and writes ELF32, but no ILP32 program links and
+  runs with it yet; that work continues separately and follows 1.0. Link ILP32 with
+  the system linker.
 
 ## Layout
 
@@ -128,9 +130,10 @@ both `cc1plus` binaries and counting `br.call` instructions whose target lies pa
 that first exposed the defect fails with `internal compiler error: Segmentation fault`
 under the system linker's binary while compiling cleanly under hld's.
 
-Not there yet: COMDAT/`.gnu.linkonce` duplicate discarding at scale, local symbols in
-the output symbol table, and thread-local storage in a shared library. An input hld
-cannot handle is refused with a clear message rather than mis-linked.
+Not there yet: discarding duplicate `.gnu.linkonce` sections — hld keeps every copy,
+so the output is correct but larger than it need be; stripping (`-s`, `-x`); and ILP32
+(above). An input hld cannot handle is refused with a clear message rather than
+mis-linked.
 
 ## License
 
