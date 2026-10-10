@@ -1093,8 +1093,14 @@ int hld_find_library(hld_link *L, const char *name, hld_archive **ar_out)
     FILE *f;
     int want_ar_first = (L->libmode == HLD_LIB_ARCHIVE
                          || L->libmode == HLD_LIB_ARCHIVE_SHARED);
-    int allow_shared = (L->libmode != HLD_LIB_ARCHIVE);
-    int allow_ar = (L->libmode != HLD_LIB_SHARED);
+    /*
+     * -r can take only an archive (hld_add_dso refuses a shared library
+     * there), so a shared library must not end the search -- whether it
+     * sits beside the archive or in an earlier directory. Look for archives
+     * alone, in every directory, whatever -a said.
+     */
+    int allow_shared = (L->libmode != HLD_LIB_ARCHIVE) && !L->relocatable;
+    int allow_ar = (L->libmode != HLD_LIB_SHARED) || L->relocatable;
 
     if (ar_out) *ar_out = NULL;
     for (i = 0; i < L->nlibpaths; i++) {
@@ -1131,7 +1137,11 @@ int hld_find_library(hld_link *L, const char *name, hld_archive **ar_out)
             }
         }
     }
-    snprintf(L->err, HLD_ERRSZ, "cannot find library -l%s", name);
+    if (L->relocatable)
+        snprintf(L->err, HLD_ERRSZ, "cannot find library -l%s (with -r only "
+                 "archives are searched: lib%s.a)", name, name);
+    else
+        snprintf(L->err, HLD_ERRSZ, "cannot find library -l%s", name);
     return -1;
 }
 

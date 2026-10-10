@@ -106,6 +106,23 @@ rm -f $W/libpb.a
 CHECKS=`expr $CHECKS + 1`
 if (cd $W && cp ../../$F/pb.o pb.o && ar rc libpb.a pb.o) > $W/ar.err 2>&1; then
     same_as_hp ar r_ar.o $F/pa.o -L$W -lpb
+    #
+    # -r can take only an archive, so a shared library of the same name must
+    # not stop the search: neither one beside the archive, nor one in an
+    # earlier -L directory. -l used to find libpb.so first and refuse the
+    # link ("a shared library cannot be an input to a relocatable link")
+    # with libpb.a right there.
+    #
+    mkdir -p $W/sofirst
+    if $HLD -shared -o $W/libpb.so $F/pb.o > $W/so.err 2>&1 &&
+       cp $W/libpb.so $W/sofirst/libpb.so; then
+        same_as_hp ar_beside_so r_ar.o $F/pa.o -L$W -lpb
+        same_as_hp ar_after_so r_ar.o $F/pa.o -L$W/sofirst -L$W -lpb
+    else
+        fail "building a shared libpb.so for the -l search case:"
+        cat $W/so.err
+    fi
+    rm -f $W/libpb.so
 else
     echo "note: no ar here, archive case not run"
 fi
