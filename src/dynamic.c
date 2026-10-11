@@ -291,11 +291,15 @@ int hld_alloc_dynamic(hld_link *L)
     /*
      * Which of the implicit directories the run path records follows the
      * platform's linker, measured: LPATH's directories whenever it is set;
-     * the two defaults only when there is neither LPATH nor any -L -- one
-     * -L and the defaults are still SEARCHED but no longer recorded.
+     * the two defaults only for a PROGRAM with neither LPATH nor any -L --
+     * one -L and the defaults are still SEARCHED but no longer recorded,
+     * and a shared library with neither records no run path at all.
+     * Recording them in a library too gave every library linked without
+     * -L a run path the platform's linker never writes.
      */
     ndefrec = L->no_runpath ? 0
-            : (L->lpath_set || !L->nlibpaths) ? L->ndeflibpaths : 0;
+            : L->lpath_set ? L->ndeflibpaths
+            : (!L->nlibpaths && !L->shared) ? L->ndeflibpaths : 0;
     if (L->nrpaths || (!L->no_runpath && (L->nlibpaths || ndefrec))) {
         size_t ndef = L->no_runpath ? 0 : L->nlibpaths + ndefrec;
         size_t k, n = 0, total = L->nrpaths + ndef;

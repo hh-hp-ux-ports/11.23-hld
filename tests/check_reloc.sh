@@ -298,7 +298,7 @@ CHECKS=`expr $CHECKS + 1`
 cp $G $W/notmlx.o
 toff=`$RE -S $W/notmlx.o 2>/dev/null | awk '/ \.text /{print $6; exit}'`
 tb=`dd if=$W/notmlx.o bs=1 skip=$((0x$toff)) count=1 2>/dev/null |
-    od -An -tu1 | tr -d ' \n'`
+    od -An -tu1 | tr -d ' \011\012'`
 if [ -n "$tb" ] && [ $(( tb & 30 )) -eq 4 ]; then
     printf "\\`printf '%03o' $(( tb ^ 4 ))`" |
         dd of=$W/notmlx.o bs=1 seek=$((0x$toff)) conv=notrunc 2>/dev/null

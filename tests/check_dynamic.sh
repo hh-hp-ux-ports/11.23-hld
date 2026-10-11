@@ -40,6 +40,12 @@ if [ -z "$XAS" ] || [ ! -x "$XAS" ]; then
 fi
 
 LIBDIR=/usr/lib/hpux64
+# gcc 4.7.4: /opt/gcc474 on 11.23, /opt/gnu/gcc474 on the 11.31 build image.
+# Found once here; a hard-coded path made half this suite silently skip there.
+GCC474=
+for d in /opt/gcc474 /opt/gnu/gcc474; do
+    if [ -x $d/bin/gcc ]; then GCC474=$d; break; fi
+done
 if [ ! -f $LIBDIR/libc.so.1 ]; then
     echo "SKIP: $LIBDIR/libc.so.1 not present"
     exit 0
@@ -111,7 +117,7 @@ fi
 # A program needing a libgcc helper, linked against the vendor archives. The
 # helper itself calls into HP's millicode, so this crosses from a GNU archive
 # into an HP one by transitive extraction.
-GCCLIB=`ls -d /opt/gcc474/lib/gcc/ia64-hp-hpux11.23/*/hpux64 2>/dev/null | head -1`
+GCCLIB=`ls -d $GCC474/lib/gcc/ia64-hp-hpux11.23/*/hpux64 2>/dev/null | head -1`
 if [ -n "$GCCLIB" ] && [ -f "$GCCLIB/libgcc.a" ] && [ -f /usr/lib/hpux64/milli.a ]; then
     cat > $W/divti.c <<'CEOF'
 #include <stdio.h>
@@ -123,7 +129,7 @@ int main(void) {
 }
 CEOF
     CHECKS=`expr $CHECKS + 1`
-    if /opt/gcc474/bin/gcc -mlp64 -O0 -c $W/divti.c -o $W/divti.o 2> $W/cc.err; then
+    if $GCC474/bin/gcc -mlp64 -O0 -c $W/divti.c -o $W/divti.o 2> $W/cc.err; then
         CHECKS=`expr $CHECKS + 1`
         if $HLD -dynamic -e _start -o $W/divti $W/crt_min.o $W/divti.o \
                 -L$GCCLIB -lgcc /usr/lib/hpux64/milli.a -L$LIBDIR -lc \
@@ -199,7 +205,7 @@ int main(void) {
     return (*a == 11 && tls_b == 22) ? 0 : 1;
 }
 CEOF
-CC=/opt/gcc474/bin/gcc
+CC=$GCC474/bin/gcc
 [ -x $CC ] || CC=gcc
 if $CC -mlp64 -fPIC -O0 -c $W/gd.c -o $W/gd.o 2> $W/cc.err; then :; else
     echo "FAIL: could not compile the dynamic-TLS fixture:"; cat $W/cc.err
@@ -260,7 +266,7 @@ fi
 # both emit the relocation and advertise the array it lives in. Getting the
 # advertisement wrong is silent: the library loads, and reads whatever
 # happens to be at the address it was linked for.
-CC=/opt/gcc474/bin/gcc
+CC=$GCC474/bin/gcc
 [ -x $CC ] || CC=gcc
 CHECKS=`expr $CHECKS + 1`
 cat > $W/shlib.c <<'CEOF'
@@ -613,6 +619,16 @@ if [ -f $W/libhldtest.so ]; then
         *langtools*) echo "FAIL: with -L given, the defaults were recorded too"
                      FAIL=1 ;;
     esac
+    # ... and a SHARED library with neither -L nor LPATH records nothing.
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -b -o $W/norp.so $W/shlib.o 2> $W/link.err; then
+        if $RE -d $W/norp.so | grep RUNPATH > /dev/null 2>&1; then
+            echo "FAIL: a library linked with no -L and no LPATH got a run path"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: linking a library with no -L:"; cat $W/link.err; FAIL=1
+    fi
     CHECKS=`expr $CHECKS + 1`
     if LPATH=$ADIR:/usr/lib/hpux64 $HLD -dynamic -e _start -o $W/lpprog \
             $W/crt_min.o $W/shmain.o -lhldtest -lc 2> $W/link.err; then
@@ -702,7 +718,7 @@ cat > $W/dbg.c <<'CEOF'
 static int helper(int x) { int y = x * 2; return y + 1; }
 int main(void) { printf("%d\n", helper(20)); return 0; }
 CEOF
-if /opt/gcc474/bin/gcc -mlp64 -g -O0 -c $W/dbg.c -o $W/dbg.o 2> $W/cc.err ||
+if $GCC474/bin/gcc -mlp64 -g -O0 -c $W/dbg.c -o $W/dbg.o 2> $W/cc.err ||
    gcc -mlp64 -g -O0 -c $W/dbg.c -o $W/dbg.o 2> $W/cc.err; then
     CHECKS=`expr $CHECKS + 1`
     if $HLD -dynamic -e _start -o $W/dbg $W/crt_min.o $W/dbg.o \
@@ -751,7 +767,7 @@ fi
 # did not -- the personality routine calls std::type_info::__is_pointer_p
 # virtually, and nothing else in the failing program did.
 CXXV=
-for cand in /opt/gcc474/bin/g++ g++; do
+for cand in $GCC474/bin/g++ g++; do
     if command -v "$cand" > /dev/null 2>&1; then CXXV=$cand; break; fi
 done
 if [ -n "$CXXV" ]; then
@@ -847,7 +863,7 @@ fi
 # guards against breaking catching outright. aCC's runtime compares
 # addresses, and its test further down is the one that fails behaviourally.
 CXXT=
-for cand in /opt/gcc474/bin/g++ g++; do
+for cand in $GCC474/bin/g++ g++; do
     if command -v "$cand" > /dev/null 2>&1; then CXXT=$cand; break; fi
 done
 if [ -n "$CXXT" ]; then
@@ -963,7 +979,7 @@ fi
 # dies on a null or read-only pointer inside the runtime's start-up, long
 # before main. Exercised here end to end: construct, throw, unwind, catch.
 CXX=
-for cand in /opt/gcc474/bin/g++ g++; do
+for cand in $GCC474/bin/g++ g++; do
     if command -v "$cand" > /dev/null 2>&1; then CXX=$cand; break; fi
 done
 if [ -n "$CXX" ]; then

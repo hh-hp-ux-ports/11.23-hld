@@ -31,8 +31,12 @@ need() {
 if [ -z "$XAS" ]; then
     XAS=`command -v ia64-hp-hpux11.23-as 2>/dev/null`
 fi
+# binutils on HP-UX: /opt/binutils on 11.23, /opt/gnu/binutils2461 on the 11.31 image
 if [ -z "$XAS" ] && [ -x /opt/binutils/bin/as ] && [ "`uname -s`" = "HP-UX" ]; then
     XAS=/opt/binutils/bin/as
+fi
+if [ -z "$XAS" ] && [ -x /opt/gnu/binutils2461/bin/as ] && [ "`uname -s`" = "HP-UX" ]; then
+    XAS=/opt/gnu/binutils2461/bin/as
 fi
 # Without an ia64 assembler, fall back to the objects committed under
 # tests/obj — assembled from the very tests/asm sources beside them, so the
@@ -231,10 +235,16 @@ for ord in "$W/sym_weak.o $W/sym_strong.o" "$W/sym_strong.o $W/sym_weak.o"; do
         # val's offset within .data, then the eight big-endian bytes there.
         vlow=`echo $vaddr | sed 's/^6000000000000//'`
         skip=`expr $((0x$doff)) + $((0x$vlow))`
-        got=`dd if=$W/ws.so bs=1 skip=$skip count=8 2>/dev/null |
-             od -An -tx1 | tr -d ' \n'`
-        if [ "$got" = 000000000000002a ]; then :; else
-            echo "FAIL: the weak definition won — val holds 0x$got, want 42"
+        # Compared as BYTES against the expected eight: od's text differs
+        # between implementations (HP's prints `0', GNU's `00', with or
+        # without a leading tab), and parsing it made this check pass only
+        # where GNU od came first on PATH.
+        printf '\000\000\000\000\000\000\000\052' > $W/want42
+        if dd if=$W/ws.so bs=1 skip=$skip count=8 2>/dev/null |
+                cmp -s - $W/want42; then :; else
+            got=`dd if=$W/ws.so bs=1 skip=$skip count=8 2>/dev/null |
+                 od -An -tx1 | tr -d ' \011\012'`
+            echo "FAIL: the weak definition won — val holds bytes $got, want 42"
             FAIL=1
         fi
     else
