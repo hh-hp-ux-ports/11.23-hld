@@ -86,6 +86,7 @@ need "DT_HASH present"             "HASH"
 need "DT_HP_LOAD_MAP present"      "HP_LOAD_MAP"
 need "DT_IA_64_PLT_RESERVE"        "IA_64_PLT_RESERVE"
 need "import relocations via RELA" "RELA "
+need "PT_HP_FASTBIND, which ldd needs" "HP_FASTBIND"
 
 # DT_JMPREL must NOT alias the DT_RELA array: under immediate binding the
 # loader walks it twice and rejects the image.
@@ -117,6 +118,39 @@ elif [ "$got" != "$expected" ]; then
     echo "  expected: $expected"
     echo "  got:      $got"
     FAIL=1
+fi
+
+# ldd is fastbind, and it lists a program's libraries only when the image has
+# a PT_HP_FASTBIND header; without one it says "not a shared executable", so
+# a dependency sweep over hld output silently found nothing. And fastbind
+# itself, now that it accepts the image, must leave one that still runs: it
+# appends its data past the end of the file and points the header there.
+if [ -x /usr/ccs/bin/ldd ]; then
+    CHECKS=`expr $CHECKS + 1`
+    if /usr/ccs/bin/ldd $W/hello 2>&1 | grep 'libc\.so\.1 *=>' > /dev/null; then :; else
+        echo "FAIL: ldd does not list libc.so.1 for an hld-linked program:"
+        /usr/ccs/bin/ldd $W/hello 2>&1 | head -3
+        FAIL=1
+    fi
+fi
+if [ -x /usr/ccs/bin/fastbind ]; then
+    CHECKS=`expr $CHECKS + 1`
+    cp $W/hello $W/hello_fb
+    if /usr/ccs/bin/fastbind $W/hello_fb > $W/fb.err 2>&1; then
+        fbsz=`$RE -l $W/hello_fb | awk '$1 == "HP_FASTBIND" { print $4 }'`
+        got=`$W/hello_fb 2> $W/run.err`; rc=$?
+        if [ $rc -ne 0 ] || [ "$got" != "$expected" ]; then
+            echo "FAIL: after fastbind the program gave rc $rc, output '$got'"
+            [ -s $W/run.err ] && cat $W/run.err
+            FAIL=1
+        elif [ -z "$fbsz" ] || [ "$fbsz" = "00000000" ]; then
+            echo "FAIL: fastbind ran but wrote no fastbind data (size '$fbsz')"
+            FAIL=1
+        fi
+    else
+        echo "FAIL: fastbind refused an hld-linked program:"; cat $W/fb.err
+        FAIL=1
+    fi
 fi
 
 # --- archives of the real toolchain --------------------------------------

@@ -329,8 +329,19 @@ bounds. (`__xpg4_extended_mask` comes from `unix98.o`, not the linker.)
 - `.note.hpux_options` (NOTE, 0x78 bytes) leads the text segment — decode before
   emitting our own.
 - HP ld emits `.fastbind` (+ PT_HP_FASTBIND) even though chatr reports fastbind
-  disabled; hypothesis: omission is tolerated. Verify once dynamic-executable output
-  exists.
+  disabled. Omitting both is tolerated by the LOADER (the program runs), but NOT by
+  `ldd`: `/usr/ccs/bin/ldd` is `fastbind`, and it calls an image with no
+  PT_HP_FASTBIND "not a shared executable" and lists nothing. Settled by changing
+  HP ld's own output one field at a time, on 11.23 and 11.31: only nulling that
+  header flips ldd; `HP_DLD_FLAGS`, the notes, footprint, stack and TLS headers,
+  the checksum/timestamp/GST tags and JMPREL do not matter. `fastbind` proper
+  needs the section as well, found by NAME: renaming `.fastbind` makes it refuse
+  the image while ldd still lists it (its type does not matter). hld therefore
+  gives a dynamic executable an empty `.fastbind` (PROGBITS, no flags, align 1)
+  and a PT_HP_FASTBIND for it, both at the end of the data image; libraries get
+  neither, as from HP ld. Running `fastbind` on such an image appends its data at
+  the next page past the end of the file and points both there, moving nothing
+  else.
 - `.hbss` = huge-bss (empty in samples). `.HP.opt_annot` (readelf shows the type as
   "VMS_LINKAGES" = 0x60000004) appears in HP-cc objects — pass-through/ignorable for v1.
 - HP cc debug sections in system objects: `.debug_actual`, `.debug_procs_info`, etc. —

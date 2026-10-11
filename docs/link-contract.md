@@ -21,7 +21,7 @@ collect2 execs `/usr/ccs/bin/ld` with essentially this argv. Requirements extrac
 | `-L dir` | add search dir; **tolerate nonexistent dirs**; full `-L` list is embedded as DT_RUNPATH by default |
 | `-l name` | search `lib<name>.so` then `lib<name>.a` in `-L` dirs then defaults (`.so` preferred; exact preference rules TBD — HP ld has `+s`/`-a shared_archive` modes) |
 | default entry | **`main`** (observed: e_entry = main's address; no `_start`, no crt0) |
-| default output | dynamic executable, deferred (lazy) binding, fastbind section emitted (we may omit), RUNPATH embedded |
+| default output | dynamic executable, deferred (lazy) binding, fastbind section emitted (hld: an empty `.fastbind` and its PT_HP_FASTBIND, which `ldd` and `fastbind` require — see format-notes), RUNPATH embedded |
 
 gcc `-shared` invokes ld with `-b` (HP flag for shared-lib output) — same library/`-L`
 handling, produces ET_DYN with SONAME unset unless `+h name`.

@@ -353,6 +353,7 @@ typedef struct {
     uint32_t ndynsym, nbucket, ndyntags, nphdr;
     uint64_t reserve_off, loadmap_off;
     osec *commentsec;         /* the stamp saying which linker built this */
+    osec *fastbindsec;        /* empty .fastbind: dynamic executables only */
     osec *interpsec, *dynsymsec, *dynstrsec, *hashsec, *dynamicsec, *reservesec;
 
     /*

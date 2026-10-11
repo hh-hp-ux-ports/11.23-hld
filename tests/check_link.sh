@@ -360,6 +360,29 @@ for nsargs in "+nosymb get_*" "-B symbolic +nosymb get_code"; do
         echo "FAIL: '$nsargs' was not accepted:"; cat $W/ns.err; FAIL=1
     fi
 done
+# A dynamic executable carries an empty .fastbind and a PT_HP_FASTBIND, as HP
+# ld's do: HP's ldd is fastbind, which refuses an image without the header,
+# and fastbind itself finds the section by name. A library and a static
+# program carry neither, also as with HP ld. Checked here so it runs off
+# HP-UX too; the dynamic suite runs ldd and fastbind on the real thing.
+CHECKS=`expr $CHECKS + 1`
+if $HLD -e _start -o $W/fbexe $W/exit42.o samples/gt1/libshlib.so 2> $W/fb.err &&
+   $HLD -b -o $W/fblib.so samples/gt1/shlib_pic.o 2>> $W/fb.err; then
+    n=`$RE -l $W/fbexe | grep -c "^  HP_FASTBIND "`
+    [ "$n" = 1 ] || { echo "FAIL: a dynamic executable has $n PT_HP_FASTBIND headers, want 1"; FAIL=1; }
+    CHECKS=`expr $CHECKS + 1`
+    n=`$RE -S $W/fbexe | grep -c " \.fastbind "`
+    [ "$n" = 1 ] || { echo "FAIL: a dynamic executable has $n .fastbind sections, want 1"; FAIL=1; }
+    for f in fblib.so det_a; do
+        CHECKS=`expr $CHECKS + 1`
+        n=`$RE -l -S $W/$f | grep -Ec "^  HP_FASTBIND | \.fastbind "`
+        [ "$n" = 0 ] || { echo "FAIL: $f has $n fastbind headers/sections, want 0"; FAIL=1; }
+    done
+else
+    echo "FAIL: the PT_HP_FASTBIND links did not complete:"; cat $W/fb.err
+    FAIL=1
+fi
+
 CHECKS=`expr $CHECKS + 1`
 if $HLD -e _start -o $W/ns $W/multi_a.o +nosymb 2> $W/ns.err; then
     echo "FAIL: +nosymb with no pattern was accepted"; FAIL=1

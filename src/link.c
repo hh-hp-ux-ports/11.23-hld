@@ -683,7 +683,8 @@ int hld_layout(hld_link *L)
     osec *o;
     hld_gsym *g;
     unsigned h;
-    /* PHDR + LOAD text + LOAD data, plus INTERP and DYNAMIC when dynamic */
+    /* PHDR + LOAD text + LOAD data, plus INTERP and DYNAMIC when dynamic,
+     * and HP_FASTBIND in a dynamic executable */
     uint32_t nphdr;
 
     /*
@@ -697,8 +698,22 @@ int hld_layout(hld_link *L)
         if ((o->flags & SHF_ALLOC) && (o->flags & SHF_TLS) && o->size)
             L->has_tls = 1;
 
+    /*
+     * A dynamic executable gets an empty .fastbind and a PT_HP_FASTBIND
+     * describing it, as from HP ld; a library gets neither. The loader needs
+     * neither, but HP's tools do: ldd -- which is fastbind -- calls an image
+     * without the program header "not a shared executable" and lists
+     * nothing, and fastbind itself finds the section by NAME and refuses an
+     * image that lacks it. Measured on 11.23 and 11.31 by changing HP ld's
+     * own output one field at a time.
+     */
+    if (L->dynamic && !L->shared && !L->fastbindsec) {
+        L->fastbindsec = osec_get(L, ".fastbind", SHT_PROGBITS, 0);
+        if (!L->fastbindsec) { lerr(L, "out of memory", NULL, NULL); return -1; }
+    }
+
     nphdr = (L->dynamic ? 5 : 3) + (L->has_tls ? 1 : 0)
-            + (L->unwind_sec ? 1 : 0);
+            + (L->unwind_sec ? 1 : 0) + (L->fastbindsec ? 1 : 0);
 
     L->nphdr = nphdr;
 
@@ -862,6 +877,9 @@ int hld_layout(hld_link *L)
         o->off = off;
         off += o->size;
     }
+    /* empty, where HP ld puts it: at the end of the data segment's image */
+    if (L->fastbindsec)
+        L->fastbindsec->off = L->data_off + L->data_filesz;
 
 #undef IS_DATA
 #undef IS_SHORT
