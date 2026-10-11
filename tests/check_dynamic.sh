@@ -1198,7 +1198,7 @@ if $CC -mlp64 -O2 -fPIC -c $W/tlsown.c -o $W/tlsown.o 2> $W/cc.err \
     if $HLD -b +h libtlsown.so -o $W/libtlsown.so $W/tlsown.o 2> $W/link.err; then
         CHECKS=`expr $CHECKS + 1`
         # the slots must carry TLS relocations, not plain addresses
-        n=`$RE -r $W/libtlsown.so 2>/dev/null | grep -c "DTPMOD\|DTPREL"`
+        n=`$RE -r $W/libtlsown.so 2>/dev/null | grep -Ec 'DTPMOD|DTPREL'`
         if [ "$n" -lt 2 ]; then
             echo "FAIL: a library's own __thread got $n TLS relocations, expected 2"
             echo "      (anchored plain addresses crash on first access)"
@@ -1488,7 +1488,7 @@ if $CC -mlp64 -O2 -fPIC -c $W/exp.c -o $W/exp.o 2> $W/cc.err; then
             2> $W/link.err; then
         n=`$RE -s $W/libhide.so 2>/dev/null \
            | awk '/Symbol table .\.dynsym/{d=1;next} /Symbol table/{d=0} d' \
-           | grep -c "exp_public\|exp_internal"`
+           | grep -Ec 'exp_public|exp_internal'`
         if [ "$n" != "0" ]; then
             echo "FAIL: +hideallsymbols still exported $n symbol(s)"
             FAIL=1

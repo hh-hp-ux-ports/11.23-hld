@@ -375,7 +375,7 @@ for pair in multi gp rt; do
        && $HLD -e _start -o $W/${pair}_direct $L/${pair}_a.o $L/${pair}_b.o \
             $L/exit_stub.o >> $W/$pair.rt.err 2>&1; then
         $CMP $W/${pair}_direct $W/${pair}_via_r > $W/$pair.rt.cmp 2>&1
-        if grep "^section \|^relocs \|^header" $W/$pair.rt.cmp > /dev/null; then
+        if grep -E '^section |^relocs |^header' $W/$pair.rt.cmp > /dev/null; then
             fail "$pair: a program linked from -r output differs from one" \
                  "linked directly:"; cat $W/$pair.rt.cmp
         fi
