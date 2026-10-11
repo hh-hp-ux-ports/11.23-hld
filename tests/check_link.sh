@@ -343,6 +343,30 @@ else
     FAIL=1
 fi
 
+# +nosymb PATTERN is accepted, with -B symbolic and without, and changes
+# nothing in a program: nothing there is preemptible to begin with. aCC on
+# 11.31 passes it to every shared-library link. Checked here as well as in
+# the dynamic suite because this one runs off HP-UX too -- the option was
+# once parsed after the `+' options' "not implemented" refusal, so no link
+# could reach it, and only the HP-UX-only suite would have said so.
+for nsargs in "+nosymb get_*" "-B symbolic +nosymb get_code"; do
+    CHECKS=`expr $CHECKS + 1`
+    if $HLD -e _start $nsargs -o $W/ns $W/multi_a.o $W/multi_b.o \
+            $W/exit_stub.o 2> $W/ns.err; then
+        if cmp -s $W/det_a $W/ns; then :; else
+            echo "FAIL: '$nsargs' changed a program's bytes"; FAIL=1
+        fi
+    else
+        echo "FAIL: '$nsargs' was not accepted:"; cat $W/ns.err; FAIL=1
+    fi
+done
+CHECKS=`expr $CHECKS + 1`
+if $HLD -e _start -o $W/ns $W/multi_a.o +nosymb 2> $W/ns.err; then
+    echo "FAIL: +nosymb with no pattern was accepted"; FAIL=1
+elif grep -q "needs an argument" $W/ns.err; then :; else
+    echo "FAIL: +nosymb with no pattern: wrong complaint:"; cat $W/ns.err; FAIL=1
+fi
+
 # On the target platform, run them: structure is only half the claim.
 if [ "`uname -s 2>/dev/null`" = "HP-UX" ] && [ "`uname -m 2>/dev/null`" = "ia64" ]; then
     progs="exit42 multi gptest"
