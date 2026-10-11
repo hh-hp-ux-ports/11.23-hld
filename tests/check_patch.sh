@@ -13,6 +13,8 @@ CHECKS=0
 # Locate an ia64 GNU assembler: explicit XAS env var, an optional untracked
 # tests/local.conf (see tests/local.conf.example), a cross triple on PATH,
 # or a native `as` when this script is itself running on ia64-hpux.
+# What ./configure found, then any per-checkout override on top of it.
+[ -f tests/config.sh ] && . tests/config.sh
 [ -f tests/local.conf ] && . tests/local.conf
 if [ -z "$XAS" ]; then
     XAS=`command -v ia64-hp-hpux11.23-as 2>/dev/null`

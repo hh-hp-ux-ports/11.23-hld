@@ -1,6 +1,14 @@
 # build output
 /build/
 
+# written by ./configure (configure itself IS committed: the HP-UX hosts have
+# no autoconf and only run the script)
+/Makefile
+/config.status
+/config.log
+/autom4te.cache/
+/tests/config.sh
+
 # HP system binaries (crt0.o, dld.so, libc.so.1, ...) for offline study — not
 # redistributable, and large. Regenerate with: sh scripts/recon.sh <workdir>
 # (run on an HP-UX 11.23/Itanium system), then copy sys_* into samples/sys/.

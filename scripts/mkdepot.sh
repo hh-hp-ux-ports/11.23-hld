@@ -73,7 +73,9 @@ chmod 755 $STAGE$PREFIX/bin/hld $STAGE$PREFIX/bin/hld-readelf
 # --- corresponding source ------------------------------------------------
 # Everything the project tracks, which is exactly what hld was built from.
 # The HP system binaries under samples/sys are deliberately excluded: they
-# are not ours to redistribute and are not part of the source.
+# are not ours to redistribute and are not part of the source. So is what
+# ./configure wrote (Makefile, config.status, ...): the source ships
+# configure itself, and whoever builds from it runs that.
 if [ -d .git ] && command -v git > /dev/null 2>&1; then
     git ls-files > build/srclist.txt
 else
@@ -81,7 +83,12 @@ else
         | sed 's|^\./||' \
         | grep -v '^build/' \
         | grep -v '^samples/sys/' \
-        | grep -v '^\.git' > build/srclist.txt
+        | grep -v '^\.git' \
+        | grep -v '^Makefile$' \
+        | grep -v '^config\.status$' \
+        | grep -v '^config\.log$' \
+        | grep -v '^autom4te\.cache/' \
+        | grep -v '^tests/config\.sh$' > build/srclist.txt
 fi
 while read f; do
     d=`dirname "$f"`

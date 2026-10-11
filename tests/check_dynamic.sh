@@ -25,6 +25,8 @@ if [ "$sys" != "HP-UX" ] || [ "$mach" != "ia64" ]; then
 fi
 
 # An assembler for the startup fixture.
+# What ./configure found, then any per-checkout override on top of it.
+[ -f tests/config.sh ] && . tests/config.sh
 [ -f tests/local.conf ] && . tests/local.conf
 # A local.conf carried over from another machine names a tool that is not here;
 # fall back to probing rather than reporting nothing was found.
@@ -42,10 +44,13 @@ fi
 LIBDIR=/usr/lib/hpux64
 # gcc 4.7.4: /opt/gcc474 on 11.23, /opt/gnu/gcc474 on the 11.31 build image.
 # Found once here; a hard-coded path made half this suite silently skip there.
-GCC474=
-for d in /opt/gcc474 /opt/gnu/gcc474; do
-    if [ -x $d/bin/gcc ]; then GCC474=$d; break; fi
-done
+# ./configure records it in tests/config.sh; without that, look in both.
+if [ -z "$GCC474" ] || [ ! -x "$GCC474/bin/gcc" ]; then
+    GCC474=
+    for d in /opt/gcc474 /opt/gnu/gcc474; do
+        if [ -x $d/bin/gcc ]; then GCC474=$d; break; fi
+    done
+fi
 if [ ! -f $LIBDIR/libc.so.1 ]; then
     echo "SKIP: $LIBDIR/libc.so.1 not present"
     exit 0
@@ -154,7 +159,7 @@ fi
 # HP's compiler calls external functions through a descriptor (@pltoff) where
 # gcc emits a direct branch, and its assembler leaves a non-zero placeholder
 # in a field awaiting relocation. Both must work.
-if [ -x /opt/aCC/bin/aCC ]; then
+if [ -x "${ACC:=/opt/aCC/bin/aCC}" ]; then
     cat > $W/hpmod.c <<'CEOF'
 int hp_add(int a, int b) { return a + b; }
 CEOF
@@ -164,7 +169,7 @@ extern int hp_add(int, int);
 int main(void) { int r = hp_add(40, 2); printf("%d\n", r); return r - 42; }
 CEOF
     CHECKS=`expr $CHECKS + 1`
-    ( cd $W && /opt/aCC/bin/aCC -Ae +DD64 -c hpmod.c hpmain.c ) > $W/acc.log 2>&1
+    ( cd $W && $ACC -Ae +DD64 -c hpmod.c hpmain.c ) > $W/acc.log 2>&1
     if [ -f $W/hpmod.o ] && [ -f $W/hpmain.o ]; then
         ( cd $W && /usr/bin/ar rc libhp.a hpmod.o ) 2>/dev/null
         CHECKS=`expr $CHECKS + 1`
@@ -915,8 +920,8 @@ fi
 # Each of those stopped hld once. The library half matters most: the
 # platform's linker must be able to link against what hld built, and an
 # exception thrown inside it must be caught by type in the program.
-if [ -x /opt/aCC/bin/aCC ]; then
-    ACC="/opt/aCC/bin/aCC +DD64 -AA"
+if [ -x "${ACC:=/opt/aCC/bin/aCC}" ]; then
+    ACX="$ACC +DD64 -AA"
     HLDA=`pwd`/$HLD
     X=$W/acx
     mkdir -p $X
@@ -938,7 +943,7 @@ int main() {
 }
 CEOF
     CHECKS=`expr $CHECKS + 1`
-    if ( cd $X && $ACC -o io io.cc -tl,$HLDA ) > $X/io.err 2>&1; then
+    if ( cd $X && $ACX -o io io.cc -tl,$HLDA ) > $X/io.err 2>&1; then
         CHECKS=`expr $CHECKS + 1`
         got=`$X/io 2>&1`
         [ "$got" = "hello from aCC" ] || {
@@ -948,13 +953,13 @@ CEOF
         FAIL=1
     fi
     CHECKS=`expr $CHECKS + 1`
-    if ( cd $X && $ACC +Z -c xlib.cc && $ACC -c xmain.cc &&
-         $ACC -b -o libx.so xlib.o -tl,$HLDA ) > $X/x.err 2>&1; then
+    if ( cd $X && $ACX +Z -c xlib.cc && $ACX -c xmain.cc &&
+         $ACX -b -o libx.so xlib.o -tl,$HLDA ) > $X/x.err 2>&1; then
         # the platform's linker links against it, and so does hld
         for who in hp hld; do
             CHECKS=`expr $CHECKS + 1`
             case $who in hp) tl= ;; hld) tl=-tl,$HLDA ;; esac
-            if ( cd $X && $ACC -o xp_$who xmain.o libx.so $tl ) \
+            if ( cd $X && $ACX -o xp_$who xmain.o libx.so $tl ) \
                     > $X/xl_$who.err 2>&1; then
                 CHECKS=`expr $CHECKS + 1`
                 got=`( ulimit -t 30; SHLIB_PATH=$X $X/xp_$who 2>&1 )`
@@ -1233,7 +1238,7 @@ fi
 # gcc emits LTOFF_FPTR and goes through the linkage table instead. So this
 # case cannot be tested with gcc at all -- a gcc-only check reports the path
 # as working while it is broken, which is how it was nearly dismissed.
-if [ -x /opt/aCC/bin/aCC ]; then
+if [ -x "${ACC:=/opt/aCC/bin/aCC}" ]; then
     cat > $W/accfp.c <<'CEOF'
 typedef int (*fp)(void);
 int accfp_impl(void) { return 1; }
@@ -1250,7 +1255,7 @@ int main(void) {
     return (q() == 2 && (void *)q == (void *)accfp_impl) ? 0 : 1;
 }
 CEOF
-    ( cd $W && /opt/aCC/bin/aCC -Ae +DD64 +z -c accfp.c -o accfp.o ) > $W/acc.log 2>&1
+    ( cd $W && $ACC -Ae +DD64 +z -c accfp.c -o accfp.o ) > $W/acc.log 2>&1
     if [ -f $W/accfp.o ]; then
         CHECKS=`expr $CHECKS + 1`
         # the fixture is only meaningful if aCC really emitted FPTR64

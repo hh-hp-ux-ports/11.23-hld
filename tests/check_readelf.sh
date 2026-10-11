@@ -94,6 +94,8 @@ need ret42 "entry is main's addr"   "Entry: *0x4000000000000"
 # Explicit CROSS_READELF env var, an optional untracked tests/local.conf (see
 # tests/local.conf.example), a cross triple on PATH, or plain readelf if this
 # happens to be running on ia64-hpux itself.
+# What ./configure found, then any per-checkout override on top of it.
+[ -f tests/config.sh ] && . tests/config.sh
 [ -f tests/local.conf ] && . tests/local.conf
 CR=${CROSS_READELF:-`command -v ia64-hp-hpux11.23-readelf 2>/dev/null`}
 if [ -z "$CR" ] && [ "`uname -s`" = "HP-UX" ]; then

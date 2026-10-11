@@ -1,17 +1,17 @@
-# hld — builds with any C99 compiler and any POSIX make. No autotools, no
-# GNU make extensions, no external dependencies.
+# Makefile.in -- turned into Makefile by ./configure, which picks the
+# compiler and the flags that compiler takes. The result is plain POSIX make
+# with no GNU extensions, so stock HP `make' runs it.
 #
-#   make CC=gcc                     typical Unix host
-#   make CC="gcc -mlp64"            natively on HP-UX 11.23/Itanium
-#   make CC="aCC -Ae +DD64" CWARN=  natively with HP aC++
+#   ./configure && make && make check
 #
-# The bundled HP cc is not a C99 compiler, so CC must be set there. Override
-# CWARN (and CSTD) when the compiler does not take gcc's flags.
+# The variables can still be overridden on the command line as before, e.g.
+#   make CC="aCC -Ae +DD64" CSTD= CWARN= COPT=-O
+# See configure.ac.
 
-CC      = cc
-CSTD    = -std=c99
-CWARN   = -Wall -Wextra -Wshadow -Wpointer-arith -Wstrict-prototypes
-COPT    = -O2 -g
+CC      = @CC@
+CSTD    = @CSTD@
+CWARN   = @CWARN@
+COPT    = @COPT@
 CFLAGS  = $(CSTD) $(CWARN) $(COPT)
 
 BUILD   = build
@@ -64,11 +64,15 @@ bootstrap: all
 # This is where the defects have actually been — see the script's header.
 
 # An SD depot for swinstall. Must be built on HP-UX (swpackage lives there);
-# works as an ordinary user. Ships the binaries, an `ld` alias that takes
-# precedence over the system linker on PATH, and the corresponding source.
+# works as an ordinary user. Ships the binaries and the corresponding source.
 # The version lives in src/version.h; mkdepot.sh reads it from there.
 package: all
 	sh scripts/mkdepot.sh
 
 clean:
 	rm -rf $(BUILD)
+
+# Everything ./configure wrote, as well as the build.
+distclean: clean
+	rm -f Makefile config.status config.log tests/config.sh
+	rm -rf autom4te.cache

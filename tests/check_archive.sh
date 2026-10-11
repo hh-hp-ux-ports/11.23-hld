@@ -14,6 +14,8 @@ CHECKS=0
 
 [ -x $HLD ] || { echo "build first: make"; exit 2; }
 
+# What ./configure found, then any per-checkout override on top of it.
+[ -f tests/config.sh ] && . tests/config.sh
 [ -f tests/local.conf ] && . tests/local.conf
 # A local.conf carried over from another machine names a tool that is not here;
 # fall back to probing rather than reporting nothing was found.

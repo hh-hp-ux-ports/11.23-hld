@@ -1,0 +1,6 @@
+# tests/config.sh -- written by ./configure; read by the test suites.
+# A tests/local.conf, read after this, still overrides any of it.
+XAS='@XAS@'
+XAR='@XAR@'
+GCC474='@GCC474@'
+ACC='@ACC@'

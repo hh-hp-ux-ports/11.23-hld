@@ -52,28 +52,33 @@ scripts/    helpers (ground-truth collection on a live 11.23 system)
 
 ## Build & test
 
-No autotools, no configure step, no external dependencies: one hand-written
-Makefile that any POSIX make can run.
-
 ```
-make CC=gcc                                  a typical Unix host
-make CC="gcc -mlp64"                         natively on HP-UX 11.23/Itanium
-make CC="aCC -Ae +DD64" CSTD= CWARN= COPT=-O natively with HP aC++
+./configure && make && make check
 ```
 
-The last line matters: hld builds with the **vendor C compiler alone**, using
-stock HP `make`, so it can be bootstrapped on a stock 11.23 system with no GNU
-toolchain present — which is the situation this linker exists to improve. (The
-bundled `/usr/bin/cc` is not an ANSI compiler and cannot be used; aC++ in `-Ae`
-mode can.)
+`configure` picks the C compiler and the flags that compiler takes — gcc gets
+`-std=c99`, its warning set and, on HP-UX, `-mlp64`; HP's compilers get ANSI
+mode and `+DD64` — and finds the tools the test suites use. The generated
+`configure` is committed and shipped: the HP-UX hosts hld is built on have no
+autoconf, and only run the script. The Makefile it writes is plain POSIX make,
+so stock HP `make` runs it, and its variables can still be overridden as
+before (`make CC=... CSTD= CWARN= COPT=-O`).
 
-`make package` builds an SD depot for `swinstall`, carrying the binaries, an
-`ld` alias that takes precedence over the system linker on PATH, and the
+hld builds with the **vendor C compiler alone** — the bundled `/usr/bin/cc`
+included — so it can be bootstrapped on a stock 11.23 system with no GNU
+toolchain present, which is the situation this linker exists to improve.
+
+`configure --with-ia64-as=PROG`, `--with-ia64-ar=PROG`, `--with-gcc474=DIR`
+and `--with-acc=PROG` name tools it does not find on its own. After editing
+`configure.ac`, run `autoconf` and commit both.
+
+`make package` builds an SD depot for `swinstall`, carrying the binaries, and the
 complete corresponding source — see `docs/packaging.md`.
 
 `make check` runs the suites. The reader and relocation tests run anywhere; the
-link tests need an `ia64-hp-hpux` assembler (point `XAS` at one, or put it in an
-untracked `tests/local.conf` — see `tests/local.conf.example`); the dynamic tests
+link tests need an `ia64-hp-hpux` assembler (`configure` looks for one; or name
+it with `--with-ia64-as`, or in an untracked `tests/local.conf` — see
+`tests/local.conf.example`); the dynamic tests
 need HP-UX/Itanium itself, since only the real dynamic loader can judge them.
 Each suite skips with a message rather than failing when its prerequisites are
 absent.
