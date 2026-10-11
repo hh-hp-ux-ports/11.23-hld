@@ -4,11 +4,13 @@
 lives there, but it works as an ordinary user — no root needed to *build* one.
 
 ```
-make CC="gcc -mlp64"
+./configure && make
 make package                    # -> build/hld-<version>-ia64-11.23.depot.gz
 ```
 
-The result is a gzipped serial depot: one product, `HLD`, in three filesets.
+The result is a gzipped serial depot: one product, `HLD`, in two filesets.
+It installs on 11.23 and on 11.31 (`os_release ?.11.23|?.11.31`); the name
+keeps 11.23, the LP64 ABI hld links for, which 11.31 runs.
 It is built with
 
 ```

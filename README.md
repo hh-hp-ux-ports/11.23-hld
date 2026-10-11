@@ -92,7 +92,9 @@ library, prints correctly and exits cleanly on HP-UX 11.23/Itanium** — and so
 does a C++ program that runs its static constructors, throws an exception
 through a frame with a destructor, and catches it. Static executables work too,
 and hld builds and runs natively on 11.23 — with GNU tools or with the vendor
-compiler alone. gcc drives it directly through `-B`.
+compiler alone. gcc drives it directly through `-B`. It runs on 11i v3
+(B.11.31) too, where every suite passes, HP aC++ A.06.26 included; what it
+links there is still 11.23-ABI LP64 code, which 11.31 runs.
 
 Working today:
 

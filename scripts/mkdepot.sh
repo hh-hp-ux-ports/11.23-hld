@@ -3,7 +3,7 @@
 #
 #   sh scripts/mkdepot.sh [version] [output.depot]
 #
-# Produces a serial depot file containing one product, HLD, with three
+# Produces a serial depot file containing one product, HLD, with two
 # filesets:
 #
 #   HLD.RUN    the linker and its inspection tool under /opt/hld/bin, and
@@ -125,6 +125,11 @@ chmod 755 $STAGE/ctrl/*
 # --- PSF -----------------------------------------------------------------
 # There is no recursive file directive in a PSF; every file and symlink gets
 # its own line, generated here.
+#
+# It installs on 11.31 as well as 11.23: hld links for the 11.23 LP64 ABI,
+# which 11.31 runs, and the suites pass there in full (aCC A.06.26, gcc 4.7.4)
+# -- with hld built on 11.31 and with the binaries this script packages. The
+# file name keeps 11.23, the ABI it links for, as every depot here does.
 emit_files() {          # $1 = directory to walk, relative to $STAGE$PREFIX
     ( cd $STAGE$PREFIX && find $1 \( -type f -o -type l \) | sed 's|^\./||' ) \
         | while read f; do
@@ -140,12 +145,12 @@ end
 product
   tag           HLD
   revision      $VERSION
-  title         hld — an LP64 linker for HP-UX 11.23 on Itanium
+  title         hld — an LP64 linker for HP-UX 11.23 and 11.31 on Itanium
   description   A from-scratch ELF-64 linker for HP-UX/IPF LP64. See /opt/hld/src for the corresponding source and /opt/hld/COPYING for the licence.
   architecture  HP-UX_B.11.23_IA64
   machine_type  ia64*
   os_name       HP-UX
-  os_release    ?.11.23
+  os_release    ?.11.23|?.11.31
   directory     $PREFIX
   is_locatable  true
 
