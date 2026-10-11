@@ -6,7 +6,7 @@
 #
 #   sh scripts/difflibs.sh /mnt/debianshare/hld-testbin/hld-0.12.2 \
 #       /var/tmp/build-libstdc++/src/.libs \
-#       /opt/gcc474/lib/gcc/ia64-hp-hpux11.23/4.7.4/hpux64/libgcc.a
+#       /opt/gnu/gcc474/lib/gcc/ia64-hp-hpux11.23/4.7.4/hpux64/libgcc.a
 #
 # This is where the defects have actually been. Every serious one this linker
 # has had was in shared-library output, and the unit tests missed each of them

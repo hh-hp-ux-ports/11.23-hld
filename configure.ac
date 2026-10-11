@@ -91,7 +91,7 @@ AS_IF([test -z "$XAS"], [
     done
 ])
 AS_IF([test -z "$XAS" && test "x$hld_os" = xHP-UX], [
-    for hld_p in /opt/binutils/bin /opt/gnu/binutils2461/bin; do
+    for hld_p in /opt/gnu/binutils2461/bin /opt/binutils/bin; do
         AS_IF([test -x "$hld_p/as"], [XAS=$hld_p/as; break])
     done
 ])
@@ -105,7 +105,7 @@ AS_IF([test -z "$XAR"], [
     done
 ])
 AS_IF([test -z "$XAR" && test "x$hld_os" = xHP-UX], [
-    for hld_p in /opt/binutils/bin /opt/gnu/binutils2461/bin /usr/ccs/bin; do
+    for hld_p in /opt/gnu/binutils2461/bin /opt/binutils/bin /usr/ccs/bin; do
         AS_IF([test -x "$hld_p/ar"], [XAR=$hld_p/ar; break])
     done
 ])
@@ -113,7 +113,7 @@ AC_MSG_RESULT([${XAR:-none}])
 
 AC_MSG_CHECKING([for gcc 4.7.4])
 AS_IF([test -z "$GCC474" && test "x$hld_os" = xHP-UX], [
-    for hld_p in /opt/gcc474 /opt/gnu/gcc474; do
+    for hld_p in /opt/gnu/gcc474 /opt/gcc474; do
         AS_IF([test -x "$hld_p/bin/gcc"], [GCC474=$hld_p; break])
     done
 ])

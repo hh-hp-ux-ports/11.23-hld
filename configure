@@ -3322,7 +3322,7 @@ fi
 if test -z "$XAS" && test "x$hld_os" = xHP-UX
 then :
 
-    for hld_p in /opt/binutils/bin /opt/gnu/binutils2461/bin; do
+    for hld_p in /opt/gnu/binutils2461/bin /opt/binutils/bin; do
         if test -x "$hld_p/as"
 then :
   XAS=$hld_p/as; break
@@ -3349,7 +3349,7 @@ fi
 if test -z "$XAR" && test "x$hld_os" = xHP-UX
 then :
 
-    for hld_p in /opt/binutils/bin /opt/gnu/binutils2461/bin /usr/ccs/bin; do
+    for hld_p in /opt/gnu/binutils2461/bin /opt/binutils/bin /usr/ccs/bin; do
         if test -x "$hld_p/ar"
 then :
   XAR=$hld_p/ar; break
@@ -3365,7 +3365,7 @@ printf %s "checking for gcc 4.7.4... " >&6; }
 if test -z "$GCC474" && test "x$hld_os" = xHP-UX
 then :
 
-    for hld_p in /opt/gcc474 /opt/gnu/gcc474; do
+    for hld_p in /opt/gnu/gcc474 /opt/gcc474; do
         if test -x "$hld_p/bin/gcc"
 then :
   GCC474=$hld_p; break

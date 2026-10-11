@@ -27,10 +27,10 @@ if [ -z "$XAR" ]; then
     XAR=`command -v ia64-hp-hpux11.23-ar 2>/dev/null`
 fi
 if [ -z "$XAS" ] && [ "`uname -s`" = "HP-UX" ]; then
-    for c in /opt/binutils/bin/as /opt/gnu/binutils2461/bin/as; do
+    for c in /opt/gnu/binutils2461/bin/as /opt/binutils/bin/as; do
         [ -x "$c" ] && { XAS=$c; break; }
     done
-    for c in /opt/binutils/bin/ar /opt/gnu/binutils2461/bin/ar; do
+    for c in /opt/gnu/binutils2461/bin/ar /opt/binutils/bin/ar; do
         [ -x "$c" ] && { XAR=$c; break; }
     done
 fi

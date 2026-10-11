@@ -46,7 +46,8 @@ if [ $# -gt 0 ]; then
     CC="$*"
 else
     CC=
-    for cand in "/opt/gcc474/bin/gcc -mlp64" "gcc -mlp64" "gcc"; do
+    for cand in "/opt/gnu/gcc474/bin/gcc -mlp64" "/opt/gcc474/bin/gcc -mlp64" \
+                "gcc -mlp64" "gcc"; do
         set -- $cand
         if command -v "$1" > /dev/null 2>&1; then CC="$cand"; break; fi
     done
@@ -93,7 +94,7 @@ case "$id1" in
     echo "FAIL: this compiler already links with hld, so stage1 would not be"
     echo "      an independent starting point and the comparison would prove"
     echo "      nothing. Pass a compiler that defaults to the system linker:"
-    echo "          sh scripts/bootstrap.sh /opt/gcc474/bin/gcc -mlp64"
+    echo "          sh scripts/bootstrap.sh /opt/gnu/gcc474/bin/gcc -mlp64"
     echo "      it reported: $id1"
     exit 1 ;;
 esac

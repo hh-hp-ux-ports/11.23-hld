@@ -32,7 +32,7 @@ fi
 # fall back to probing rather than reporting nothing was found.
 [ -n "$XAS" ] && [ ! -x "$XAS" ] && XAS=
 if [ -z "$XAS" ]; then
-    for cand in /opt/binutils/bin/as /opt/gnu/binutils2461/bin/as; do
+    for cand in /opt/gnu/binutils2461/bin/as /opt/binutils/bin/as; do
         [ -x "$cand" ] && { XAS=$cand; break; }
     done
 fi
@@ -42,12 +42,13 @@ if [ -z "$XAS" ] || [ ! -x "$XAS" ]; then
 fi
 
 LIBDIR=/usr/lib/hpux64
-# gcc 4.7.4: /opt/gcc474 on 11.23, /opt/gnu/gcc474 on the 11.31 build image.
+# gcc 4.7.4: /opt/gnu/gcc474 on both the 11.23 and 11.31 images; /opt/gcc474
+# on 11.23 systems that predate it.
 # Found once here; a hard-coded path made half this suite silently skip there.
 # ./configure records it in tests/config.sh; without that, look in both.
 if [ -z "$GCC474" ] || [ ! -x "$GCC474/bin/gcc" ]; then
     GCC474=
-    for d in /opt/gcc474 /opt/gnu/gcc474; do
+    for d in /opt/gnu/gcc474 /opt/gcc474; do
         if [ -x $d/bin/gcc ]; then GCC474=$d; break; fi
     done
 fi

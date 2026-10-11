@@ -8,7 +8,8 @@
 # <working-dir> should be empty/scratch; all output lands there.
 
 W=${1:?usage: sh recon.sh <working-dir>}
-GCC=/opt/gcc474/bin/gcc
+GCC=/opt/gnu/gcc474/bin/gcc
+[ -x $GCC ] || GCC=/opt/gcc474/bin/gcc
 LD=/usr/ccs/bin/ld
 
 mkdir -p "$W"

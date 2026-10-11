@@ -33,12 +33,13 @@ need() {
 if [ -z "$XAS" ]; then
     XAS=`command -v ia64-hp-hpux11.23-as 2>/dev/null`
 fi
-# binutils on HP-UX: /opt/binutils on 11.23, /opt/gnu/binutils2461 on the 11.31 image
-if [ -z "$XAS" ] && [ -x /opt/binutils/bin/as ] && [ "`uname -s`" = "HP-UX" ]; then
-    XAS=/opt/binutils/bin/as
-fi
+# binutils on HP-UX: /opt/gnu/binutils2461 on both the 11.23 and 11.31 images;
+# /opt/binutils on 11.23 systems that predate it
 if [ -z "$XAS" ] && [ -x /opt/gnu/binutils2461/bin/as ] && [ "`uname -s`" = "HP-UX" ]; then
     XAS=/opt/gnu/binutils2461/bin/as
+fi
+if [ -z "$XAS" ] && [ -x /opt/binutils/bin/as ] && [ "`uname -s`" = "HP-UX" ]; then
+    XAS=/opt/binutils/bin/as
 fi
 # Without an ia64 assembler, fall back to the objects committed under
 # tests/obj — assembled from the very tests/asm sources beside them, so the
