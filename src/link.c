@@ -1308,8 +1308,9 @@ int hld_alloc_linkage(hld_link *L)
                  * left as they are; code reaching the variable gp-relatively
                  * cannot be redirected by any linker.
                  */
-                if (L->shared && !L->bsymbolic
-                    && g && g->kind == HLD_SYM_DEFINED
+                if (L->shared && g
+                    && (!L->bsymbolic || hld_nosymb_match(L, g->name))
+                    && g->kind == HLD_SYM_DEFINED
                     && ((want_call || want_opd || want_ipltd)
                         || ((want_dyn || want_dlt)
                             && (g->type == STT_OBJECT || g->type == STT_NOTYPE))))
@@ -1959,6 +1960,7 @@ void hld_link_free(hld_link *L)
     free(L->coderanges);
     free(L->libpaths);
     free(L->deflibpaths);
+    free(L->nosymb);
     free(L->lpath_buf);
     free(L->rpaths);
     free(L->exports);

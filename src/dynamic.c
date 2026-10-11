@@ -1061,6 +1061,36 @@ static int dirvec_add(char ***v, size_t *n, size_t *cap, const char *dir)
 }
 
 /* -L: a directory to search at link time. */
+int hld_add_nosymb(hld_link *L, const char *pattern)
+{
+    return dirvec_add(&L->nosymb, &L->nnosymb, &L->nosymb_cap, pattern);
+}
+
+/* Shell-style match with `*' only, which is all the platform's linker
+ * documents for +nosymb and all aCC passes. */
+static int glob_star(const char *p, const char *s)
+{
+    for (; *p; p++, s++) {
+        if (*p == '*') {
+            while (p[1] == '*') p++;
+            if (!p[1]) return 1;
+            for (; *s; s++)
+                if (glob_star(p + 1, s)) return 1;
+            return 0;
+        }
+        if (*p != *s) return 0;
+    }
+    return *s == 0;
+}
+
+int hld_nosymb_match(const hld_link *L, const char *name)
+{
+    size_t i;
+    for (i = 0; i < L->nnosymb; i++)
+        if (glob_star(L->nosymb[i], name)) return 1;
+    return 0;
+}
+
 int hld_add_libpath(hld_link *L, const char *dir)
 {
     return dirvec_add(&L->libpaths, &L->nlibpaths, &L->libpaths_cap, dir);

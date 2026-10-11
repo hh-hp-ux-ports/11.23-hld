@@ -308,6 +308,14 @@ typedef struct {
     int hide_all;             /* +hideallsymbols */
     int bsymbolic;            /* -B symbolic: bind own calls at link time */
     /*
+     * +nosymb PATTERN: symbols -B symbolic must leave preemptible. aCC on
+     * 11.31 passes `+nosymb _ZTS*' for every shared library, so that the
+     * type-name strings keep one identity per process even under -B
+     * symbolic. Glob patterns; `*' matches any run of characters.
+     */
+    char **nosymb;
+    size_t nnosymb, nosymb_cap;
+    /*
      * A shared library relocates addresses of its own data against a segment
      * anchor: a LOCAL SECTION symbol in .dynsym, with the offset carried in
      * the addend. This is what the platform's linker does, and it is the only
@@ -406,6 +414,8 @@ int  hld_add_dso(hld_link *L, const char *path);
 int  hld_add_libpath(hld_link *L, const char *dir);
 int  hld_init_libpaths(hld_link *L);
 int  hld_add_rpath(hld_link *L, const char *dir);
+int  hld_add_nosymb(hld_link *L, const char *pattern);
+int  hld_nosymb_match(const hld_link *L, const char *name);
 int  hld_add_export(hld_link *L, const char *name);
 int  hld_apply_exports(hld_link *L);
 int  hld_find_library(hld_link *L, const char *name, hld_archive **ar_out);

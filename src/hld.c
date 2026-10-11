@@ -130,6 +130,7 @@ int main(int argc, char **argv)
             || strcmp(argv[i], "-u") == 0 || strcmp(argv[i], "+h") == 0
             || strcmp(argv[i], "+b") == 0 || strcmp(argv[i], "+e") == 0
             || strcmp(argv[i], "+ee") == 0 || strcmp(argv[i], "-B") == 0
+            || strcmp(argv[i], "+nosymb") == 0
             || strcmp(argv[i], "+Accept") == 0 || strcmp(argv[i], "-soname") == 0
             || strcmp(argv[i], "-L") == 0 || strcmp(argv[i], "-l") == 0)
             i++;
@@ -326,6 +327,20 @@ int main(int argc, char **argv)
             return 1;
         }
         if (strcmp(a, "-Bsymbolic") == 0) { L.bsymbolic = 1; continue; }
+        /*
+         * +nosymb PATTERN: under -B symbolic, leave matching symbols
+         * preemptible. Without -B symbolic every exported symbol already
+         * is, so it then changes nothing -- which is the case aCC on 11.31
+         * creates, passing `+nosymb _ZTS*' to every shared-library link.
+         */
+        if (strcmp(a, "+nosymb") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "hld: option `+nosymb' needs an argument\n");
+                return 1;
+            }
+            if (hld_add_nosymb(&L, argv[++i]) < 0) goto fail;
+            continue;
+        }
         if (strcmp(a, "-rdynamic") == 0 || strcmp(a, "-E") == 0
             || strcmp(a, "--export-dynamic") == 0) continue;
         /* the GNU spelling of +noallowunsats; see the note there */

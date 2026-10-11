@@ -1436,6 +1436,29 @@ if $CC -mlp64 -O2 -fPIC -c $W/int.c -o $W/int.o 2> $W/cc.err; then
     else
         echo "FAIL: -B symbolic was not accepted:"; cat $W/link.err; FAIL=1
     fi
+    # +nosymb PATTERN keeps matching symbols preemptible under -B symbolic:
+    # int_impl by name, then both by a glob. aCC on 11.31 passes
+    # `+nosymb _ZTS*' to every shared-library link, WITHOUT -B symbolic --
+    # there it must change nothing, and must not be refused.
+    for case in "int_impl:2 2 1 1:-B symbolic" "int_*:2 2 1 2:-B symbolic" \
+                "_ZTS*:2 2 1 2:"; do
+        pat=`echo "$case" | cut -d: -f1`
+        want=`echo "$case" | cut -d: -f2`
+        sym=`echo "$case" | cut -d: -f3`
+        CHECKS=`expr $CHECKS + 1`
+        if $HLD -b +h libint.so $sym +nosymb "$pat" -o $W/libint.so \
+                $W/int.o 2> $W/link.err; then
+            $CC -mlp64 -o $W/intprog3 $W/intmain.c -L$W -lint 2> $W/link.err
+            got=`SHLIB_PATH=$W LD_LIBRARY_PATH=$W $W/intprog3`
+            if [ "$got" != "$want" ]; then
+                echo "FAIL: $sym +nosymb '$pat': got '$got', expected '$want'"
+                FAIL=1
+            fi
+        else
+            echo "FAIL: $sym +nosymb '$pat' was not accepted:"; cat $W/link.err
+            FAIL=1
+        fi
+    done
 fi
 
 # --- +e decides what a library offers ---------------------------------------
