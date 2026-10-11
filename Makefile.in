@@ -69,8 +69,11 @@ bootstrap: all
 package: all
 	sh scripts/mkdepot.sh
 
+# HP's cc, given several sources and -o, still leaves one object per source
+# in the directory it runs in.
 clean:
 	rm -rf $(BUILD)
+	rm -f *.o
 
 # Everything ./configure wrote, as well as the build.
 distclean: clean

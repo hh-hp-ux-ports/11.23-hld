@@ -76,6 +76,12 @@ chmod 755 $STAGE$PREFIX/bin/hld $STAGE$PREFIX/bin/hld-readelf
 # are not ours to redistribute and are not part of the source. So is what
 # ./configure wrote (Makefile, config.status, ...): the source ships
 # configure itself, and whoever builds from it runs that.
+#
+# Without git (the usual case on HP-UX) the list is the tree minus what a
+# build leaves in it -- HP's cc drops an object per source in the top
+# directory, and test runs write logs there -- and minus tests/local.conf,
+# which names one machine's tools. 0.12.3's depot shipped all three and
+# lacked samples/gt1: package from a clean copy of the tree.
 if [ -d .git ] && command -v git > /dev/null 2>&1; then
     git ls-files > build/srclist.txt
 else
@@ -83,12 +89,15 @@ else
         | sed 's|^\./||' \
         | grep -v '^build/' \
         | grep -v '^samples/sys/' \
-        | grep -v '^\.git' \
+        | grep -v '^\.git/' \
         | grep -v '^Makefile$' \
         | grep -v '^config\.status$' \
         | grep -v '^config\.log$' \
         | grep -v '^autom4te\.cache/' \
-        | grep -v '^tests/config\.sh$' > build/srclist.txt
+        | grep -v '^tests/config\.sh$' \
+        | grep -v '^tests/local\.conf$' \
+        | grep -v '^[^/]*\.o$' \
+        | grep -v '^[^/]*\.log$' > build/srclist.txt
 fi
 while read f; do
     d=`dirname "$f"`

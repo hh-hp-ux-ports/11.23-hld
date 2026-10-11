@@ -1,5 +1,6 @@
-# build output
+# build output; HP's cc leaves an object per source where it runs
 /build/
+/*.o
 
 # written by ./configure (configure itself IS committed: the HP-UX hosts have
 # no autoconf and only run the script)
