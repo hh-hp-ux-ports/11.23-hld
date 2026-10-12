@@ -66,7 +66,12 @@ before (`make CC=... CSTD= CWARN= COPT=-O`).
 
 hld builds with the **vendor C compiler alone** — the bundled `/usr/bin/cc`
 included — so it can be bootstrapped on a stock 11.23 system with no GNU
-toolchain present, which is the situation this linker exists to improve.
+toolchain present, which is the situation this linker exists to improve. The
+bundled compiler ignores `-O`, though, and an unoptimised hld spends about a
+quarter more CPU on a large link (measured on gcc's 50 MB `cc1plus`: 179 s
+against 140 s, the output identical), so where gcc or aC++ is installed, give
+`configure` that compiler (`CC=/opt/gnu/gcc474/bin/gcc ./configure`). Release
+depots are built that way, with gcc 4.7.4 at `-O2`.
 
 `configure --with-ia64-as=PROG`, `--with-ia64-ar=PROG`, `--with-gcc474=DIR`
 and `--with-acc=PROG` name tools it does not find on its own. After editing
