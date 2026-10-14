@@ -1979,6 +1979,10 @@ void hld_link_free(hld_link *L)
     free(L->coderanges);
     free(L->libpaths);
     free(L->deflibpaths);
+    if (L->defsearch) {
+        for (i = 0; i < L->ndeflibpaths; i++) free(L->defsearch[i]);
+        free(L->defsearch);
+    }
     free(L->nosymb);
     free(L->lpath_buf);
     free(L->rpaths);

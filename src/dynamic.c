@@ -1130,11 +1130,38 @@ int hld_init_libpaths(hld_link *L)
                       "/opt/langtools/lib/hpux64");
 }
 
+/*
+ * --sysroot=DIR: search the default directories under DIR, for linking an
+ * 11.23 program on an 11.31 host, whose /usr/lib/hpux64 holds the HOST's
+ * libraries; anything missing from the sysroot would otherwise be taken
+ * from there without a word. Only the search moves: the run path keeps
+ * the plain directories (dynamic.c's RPATH_NTH reads deflibpaths), because
+ * they are where the target looks. LPATH's directories are the caller's
+ * explicit choice and are used as given.
+ */
+int hld_set_sysroot(hld_link *L)
+{
+    size_t i, n;
+
+    if (L->lpath_set) return 0;
+    L->defsearch = calloc(L->ndeflibpaths ? L->ndeflibpaths : 1,
+                          sizeof *L->defsearch);
+    if (!L->defsearch) return -1;
+    for (i = 0; i < L->ndeflibpaths; i++) {
+        n = strlen(L->sysroot) + strlen(L->deflibpaths[i]) + 1;
+        if (!(L->defsearch[i] = malloc(n))) return -1;
+        strcpy(L->defsearch[i], L->sysroot);
+        strcat(L->defsearch[i], L->deflibpaths[i]);
+    }
+    return 0;
+}
+
 /* The -L list, then the implicit directories: one sequence to search. */
 static const char *libdir_nth(const hld_link *L, size_t i)
 {
-    return i < L->nlibpaths ? L->libpaths[i]
-                            : L->deflibpaths[i - L->nlibpaths];
+    if (i < L->nlibpaths) return L->libpaths[i];
+    i -= L->nlibpaths;
+    return L->defsearch ? L->defsearch[i] : L->deflibpaths[i];
 }
 
 /* +b: a directory the loader should search, ahead of the -L defaults. */

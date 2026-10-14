@@ -422,13 +422,18 @@ int hld_link_millicode(hld_link *L)
             }
     if (!wanted) return 0;
 
-    /* each in turn -- stopping at the first that exists was the bug */
+    /* each in turn -- stopping at the first that exists was the bug;
+     * under --sysroot, the sysroot's copies and never the host's */
     for (p = paths; *p; p++) {
-        FILE *f = fopen(*p, "rb");
+        char path[1024];
+        FILE *f;
         hld_archive *ar;
-        if (!f) continue;
+        if (snprintf(path, sizeof path, "%s%s",
+                     L->sysroot ? L->sysroot : "", *p) >= (int)sizeof path)
+            continue;
+        if (!(f = fopen(path, "rb"))) continue;
         fclose(f);
-        if (hld_archive_open(L, *p, &ar) < 0) {
+        if (hld_archive_open(L, path, &ar) < 0) {
             L->err[0] = 0;          /* not fatal: it was only a guess */
             continue;
         }

@@ -348,6 +348,14 @@ typedef struct {
     size_t ndeflibpaths, deflibpaths_cap;
     char *lpath_buf;          /* LPATH, split in place; owns those strings */
     int lpath_set;
+    /*
+     * --sysroot=DIR: the defaults above, and the millicode archives, are
+     * read from under DIR -- but the run path still records the plain
+     * directories, which are where the target system looks. defsearch is
+     * deflibpaths with the prefix, for searching only; NULL without one.
+     */
+    const char *sysroot;
+    char **defsearch;
     char *dynstr;
     size_t dynstr_len, dynstr_cap;
     uint32_t ndynsym, nbucket, ndyntags, nphdr;
@@ -414,6 +422,7 @@ int  hld_link_millicode(hld_link *L);
 int  hld_add_dso(hld_link *L, const char *path);
 int  hld_add_libpath(hld_link *L, const char *dir);
 int  hld_init_libpaths(hld_link *L);
+int  hld_set_sysroot(hld_link *L);
 int  hld_add_rpath(hld_link *L, const char *dir);
 int  hld_add_nosymb(hld_link *L, const char *pattern);
 int  hld_nosymb_match(const hld_link *L, const char *name);

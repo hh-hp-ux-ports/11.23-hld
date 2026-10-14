@@ -62,6 +62,11 @@ static void usage(void)
         "  -u SYM       treat SYM as undefined, so archives are searched for it\n"
         "  -L DIR       add a library search directory\n"
         "  -l NAME      link libNAME.so, libNAME.so.1 or libNAME.a\n"
+        "  --sysroot=DIR  after -L, search DIR/usr/lib/hpux64 and\n"
+        "               DIR/opt/langtools/lib/hpux64, and take millicode from\n"
+        "               DIR/usr/lib/hpux64 -- for an 11.23 program linked on\n"
+        "               another release; the run path still records the plain\n"
+        "               directories (LPATH, when set, is used as given)\n"
         "  -a MODE      what -l looks for: archive, shared, archive_shared,\n"
         "               shared_archive or default\n"
         "  -b, -shared  produce a shared library (ET_DYN) instead of a program\n"
@@ -115,6 +120,14 @@ int main(int argc, char **argv)
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-r") == 0) L.relocatable = 1;
         /* so is the target release, which decides how e_flags are read */
+        /* and the sysroot, which decides where every -l looks */
+        if (strncmp(argv[i], "--sysroot=", 10) == 0) {
+            if (!argv[i][10]) {
+                fprintf(stderr, "hld: --sysroot= needs a directory\n");
+                return 1;
+            }
+            L.sysroot = argv[i] + 10;
+        }
         if (strncmp(argv[i], "--kernel-module=", 16) == 0) {
             const char *rel = argv[i] + 16;
             if (strcmp(rel, "11.23") == 0) L.kmod_target = 1123;
@@ -134,6 +147,10 @@ int main(int argc, char **argv)
             || strcmp(argv[i], "+Accept") == 0 || strcmp(argv[i], "-soname") == 0
             || strcmp(argv[i], "-L") == 0 || strcmp(argv[i], "-l") == 0)
             i++;
+    }
+    if (L.sysroot && hld_set_sysroot(&L) < 0) {
+        fprintf(stderr, "hld: out of memory\n");
+        return 1;
     }
 
     for (i = 1; i < argc; i++) {
@@ -258,6 +275,12 @@ int main(int argc, char **argv)
             continue;
         }
         if (strcmp(a, "-r") == 0) continue;            /* seen above */
+        if (strncmp(a, "--sysroot=", 10) == 0) continue;   /* seen above */
+        if (strcmp(a, "--sysroot") == 0) {
+            fprintf(stderr, "hld: option `--sysroot' takes its directory as "
+                    "--sysroot=DIR\n");
+            return 1;
+        }
         if (strcmp(a, "--kernel-module") == 0
             || strncmp(a, "--kernel-module=", 16) == 0) {
             L.kmod_check = 1;           /* the release was read above */

@@ -394,6 +394,38 @@ else
     FAIL=1
 fi
 
+# --sysroot=DIR moves the default library search (and the millicode
+# archives) under DIR -- for linking an 11.23 program on an 11.31 host --
+# but the run path still names the plain directories, where the target
+# looks. The library exists only under the fake sysroot, so without the
+# option the same link must fail: that is the control.
+mkdir -p $W/sr/usr/lib/hpux64
+cp samples/gt1/libshlib.so $W/sr/usr/lib/hpux64/libshlib.so
+CHECKS=`expr $CHECKS + 1`
+if env -u LPATH $HLD -e _start -o $W/srx $W/exit42.o -lshlib > $W/sr.err 2>&1; then
+    echo "FAIL: -lshlib was found without --sysroot (the control is broken)"; FAIL=1
+fi
+CHECKS=`expr $CHECKS + 1`
+if env -u LPATH $HLD --sysroot=$W/sr -e _start -o $W/srx $W/exit42.o -lshlib \
+        2> $W/sr.err; then
+    CHECKS=`expr $CHECKS + 1`
+    rp=`$RE -d $W/srx | grep RUNPATH`
+    case "$rp" in
+    *"$W"*) echo "FAIL: --sysroot leaked into the run path: $rp"; FAIL=1 ;;
+    *"[/usr/lib/hpux64:/opt/langtools/lib/hpux64]"*) ;;
+    *) echo "FAIL: run path under --sysroot is '$rp'"; FAIL=1 ;;
+    esac
+    CHECKS=`expr $CHECKS + 1`
+    $RE -d $W/srx | grep NEEDED | grep libshlib > /dev/null ||
+        { echo "FAIL: --sysroot link does not need libshlib"; FAIL=1; }
+else
+    echo "FAIL: --sysroot did not find the sysroot's library:"; cat $W/sr.err; FAIL=1
+fi
+CHECKS=`expr $CHECKS + 1`
+if $HLD --sysroot -e _start -o $W/srx $W/exit42.o > $W/sr.err 2>&1; then
+    echo "FAIL: a bare --sysroot was accepted"; FAIL=1
+fi
+
 CHECKS=`expr $CHECKS + 1`
 if $HLD -e _start -o $W/ns $W/multi_a.o +nosymb 2> $W/ns.err; then
     echo "FAIL: +nosymb with no pattern was accepted"; FAIL=1
