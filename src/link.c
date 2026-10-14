@@ -783,9 +783,36 @@ int hld_layout(hld_link *L)
                     && !((o)->flags & SHF_TLS))
 #define IS_SHORT(o) (((o)->flags & SHF_IA_64_SHORT) != 0)
 
+    for (o = L->osecs; o; o = o->next) {          /* long PROGBITS */
+        if (!IS_DATA(o) || IS_SHORT(o) || o->type == SHT_NOBITS) continue;
+        addr = align_up(addr, o->align);
+        off = align_up(off, o->align);
+        o->addr = addr; o->off = off;
+        addr += o->size; off += o->size;
+    }
+
+    /*
+     * The TLS template: initialised part, then the zero-filled part, in an
+     * address range of its OWN. dld takes any symbol whose address falls
+     * inside the PT_HP_TLS range for a thread-specific one, and refuses a
+     * plain data relocation against it ("Non thread specific relocation
+     * DIR64MSB referencing thread specific symbol: __data_seg"). So the
+     * template neither starts the segment, where __data_seg -- the anchor
+     * every local data address is relocated against -- sits, nor lends its
+     * .tbss addresses to the data after it, as it once did. HP ld goes
+     * further and puts it past the end of the segment; hld keeps it mapped,
+     * because .tdata's image is read from memory. Every TLS offset is taken
+     * from tls_base, so where the block sits changes none of them.
+     */
     if (L->has_tls) {
         uint64_t tls_end;
 
+        if (addr == L->data_addr) {     /* nothing ahead of it: keep the */
+            addr += 16;                 /* anchor out of the TLS range */
+            off += 16;
+        }
+        addr = align_up(addr, 16);
+        off = align_up(off, 16);
         L->tls_base = addr;
         L->tls_off = off;
         addr += 16;
@@ -808,14 +835,11 @@ int hld_layout(hld_link *L)
             tls_end += o->size;
         }
         L->tls_memsz = align_up(tls_end - L->tls_base, 16);
-    }
 
-    for (o = L->osecs; o; o = o->next) {          /* long PROGBITS */
-        if (!IS_DATA(o) || IS_SHORT(o) || o->type == SHT_NOBITS) continue;
-        addr = align_up(addr, o->align);
-        off = align_up(off, o->align);
-        o->addr = addr; o->off = off;
-        addr += o->size; off += o->size;
+        /* what follows starts past the whole template, .tbss included;
+         * the file keeps pace, so offsets stay congruent with addresses */
+        off += L->tls_base + L->tls_memsz - addr;
+        addr = L->tls_base + L->tls_memsz;
     }
 
     /*

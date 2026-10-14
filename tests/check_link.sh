@@ -76,7 +76,7 @@ getobj() {
 }
 
 mkdir -p $W
-for f in exit42 exit_stub multi_a multi_b gp_a gp_b; do
+for f in exit42 exit_stub multi_a multi_b gp_a gp_b tls_a; do
     getobj $f
 done
 
@@ -392,6 +392,38 @@ if $HLD -e _start -o $W/fbexe $W/exit42.o samples/gt1/libshlib.so 2> $W/fb.err &
 else
     echo "FAIL: the PT_HP_FASTBIND links did not complete:"; cat $W/fb.err
     FAIL=1
+fi
+
+# The TLS template has an address range of its own. dld treats any symbol
+# whose address lies inside the PT_HP_TLS range as thread-specific and
+# refuses a plain data relocation against it -- which every C++ library
+# hit once the header was PT_HP_TLS, because the template started the data
+# segment, where __data_seg (the anchor of every local data relocation)
+# sits, and its .tbss shared addresses with the data after it. So: no
+# ordinary symbol inside the range, and the segment start outside it.
+CHECKS=`expr $CHECKS + 1`
+if $HLD -b -o $W/tls.so $W/tls_a.o 2> $W/tls.err; then
+    bad=`( $RE -l $W/tls.so; $RE -s $W/tls.so ) | awk '
+        function hex(s,   i, v) {
+            v = 0; s = tolower(s)
+            for (i = 1; i <= length(s); i++)
+                v = v * 16 + index("0123456789abcdef", substr(s, i, 1)) - 1
+            return v
+        }
+        $1 == "HP_TLS" { tv = hex(substr($3, 9)); tm = hex($5) }
+        $1 == "LOAD" && $6 == "RW" { da = hex(substr($3, 9)) }
+        # the two linker-defined names FOR the template belong inside it
+        $8 == "__thread_specific_seg" || $8 == "__TLS_INIT_START" { next }
+        NF >= 8 && $2 ~ /^60000000/ && $4 != "TLS" { v[++n] = hex(substr($2, 9)); nm[n] = $8 }
+        END {
+            if (tm == 0) { print "no-TLS-range"; exit }
+            if (da >= tv && da < tv + tm) print "segment-start"
+            for (i = 1; i <= n; i++)
+                if (v[i] >= tv && v[i] < tv + tm) print nm[i]
+        }' | sort -u | tr '\n' ' '`
+    [ -z "$bad" ] || { echo "FAIL: inside the PT_HP_TLS range: $bad"; FAIL=1; }
+else
+    echo "FAIL: linking the TLS fixture:"; cat $W/tls.err; FAIL=1
 fi
 
 # Every input's .comment -- where its compiler records itself -- is carried
