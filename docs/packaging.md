@@ -8,12 +8,19 @@ CC=/opt/gnu/gcc474/bin/gcc ./configure && make
 make package                    # -> build/hld-<version>-ia64-11.23.depot.gz
 ```
 
-Release depots are built on 11.23 with gcc 4.7.4 at `-O2`, as above: the
-bundled `cc` ignores `-O`, and that unoptimised linker spends about a quarter
-more CPU on a large link (179 s against 140 s on gcc's `cc1plus`, byte-identical
-output). Check before packaging that the binary needs only system libraries —
-`build/hld-readelf -d build/hld` should name nothing outside `/usr/lib/hpux64` —
-so the depot runs on a machine with no gcc installed.
+Release binaries are built with gcc 4.7.4 at `-O2`: the bundled `cc` ignores
+`-O`, and that unoptimised linker spends about a quarter more CPU on a large
+link (179 s against 140 s on gcc's `cc1plus`, byte-identical output).
+
+From 0.14.0 they are built OFF the target, by `scripts/xbuild.sh`: a cross
+gcc 4.7.4 compiles the sources for `ia64-hp-hpux11.23`, and this tree's own
+hld, built for the host, links them with `--sysroot` against a copy of the
+target's libraries. The binaries need only `libc.so.1` and `libunwind.so.1`,
+and their run path names only `/usr/lib/hpux64` and
+`/opt/langtools/lib/hpux64` -- a native gcc build instead records gcc's own
+`-L` directories, because HP ld puts every `-L` in the run path. Copy them
+into `build/` and run `scripts/mkdepot.sh` on HP-UX: packaging is the only
+step that needs it. The script's header names what it needs.
 
 The result is a gzipped serial depot: one product, `HLD`, in two filesets.
 It installs on 11.23 and on 11.31 (`os_release ?.11.23|?.11.31`); the name

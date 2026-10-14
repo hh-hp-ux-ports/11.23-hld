@@ -71,7 +71,8 @@ bundled compiler ignores `-O`, though, and an unoptimised hld spends about a
 quarter more CPU on a large link (measured on gcc's 50 MB `cc1plus`: 179 s
 against 140 s, the output identical), so where gcc or aC++ is installed, give
 `configure` that compiler (`CC=/opt/gnu/gcc474/bin/gcc ./configure`). Release
-depots are built that way, with gcc 4.7.4 at `-O2`.
+binaries are built with gcc 4.7.4 at `-O2`, off the target, by
+`scripts/xbuild.sh` (see `docs/packaging.md`).
 
 `configure --with-ia64-as=PROG`, `--with-ia64-ar=PROG`, `--with-gcc474=DIR`
 and `--with-acc=PROG` name tools it does not find on its own. After editing
