@@ -274,6 +274,59 @@ if [ -f $W/gd.o ]; then
         cat $W/link.err
         FAIL=1
     fi
+    # Its TLS is described the platform's way: PT_HP_TLS, not the generic
+    # PT_TLS, covering the template.
+    CHECKS=`expr $CHECKS + 1`
+    tlsph=`$RE -l $W/gdprog 2>/dev/null | grep -E "^  (HP_TLS|TLS) "`
+    case "$tlsph" in
+    *HP_TLS*" 00000000 R "*) echo "FAIL: the program's PT_HP_TLS is empty: $tlsph"; FAIL=1 ;;
+    "  HP_TLS "*) ;;
+    *) echo "FAIL: TLS program header is '$tlsph', want one PT_HP_TLS"; FAIL=1 ;;
+    esac
+fi
+
+# --- threads in a program with no TLS of its own ---------------------------
+# dld reserves the 16-byte thread control block at tp+0 only when the
+# EXECUTABLE has a PT_HP_TLS header -- HP ld writes one into every program,
+# empty or not. Without it the libraries' static TLS starts at 0,
+# libpthread's lands on the word it keeps its own pointer in, and the first
+# pthread_create that reuses a cached thread structure dies in free(). So:
+# threads created and joined one after another, which reuses them.
+CHECKS=`expr $CHECKS + 1`
+cat > $W/thr.c <<'CEOF'
+#include <pthread.h>
+#include <stdio.h>
+static void *work(void *a) { return (void *)((long)a + 1); }
+int main(void) {
+    pthread_t t; void *r; long sum = 0; int i;
+    for (i = 0; i < 8; i++) {
+        if (pthread_create(&t, 0, work, (void *)(long)i) != 0) return 2;
+        if (pthread_join(t, &r) != 0) return 3;
+        sum += (long)r;
+    }
+    printf("%ld\n", sum);
+    return sum == 36 ? 0 : 1;
+}
+CEOF
+if $CC -mlp64 -D_REENTRANT -O0 -c $W/thr.c -o $W/thr.o 2> $W/cc.err; then
+    mkdir -p $W/gdbin; rm -f $W/gdbin/ld; ln -s "`pwd`/$HLD" $W/gdbin/ld
+    CHECKS=`expr $CHECKS + 1`
+    if $CC -mlp64 -B$W/gdbin/ -o $W/thrprog $W/thr.o -lpthread 2> $W/link.err; then
+        CHECKS=`expr $CHECKS + 1`
+        got=`( ulimit -t 30; $W/thrprog ) 2>&1`
+        rc=$?
+        if [ $rc -ne 0 ] || [ "$got" != "36" ]; then
+            echo "FAIL: threads created one after another: exit $rc, output '$got', expected '36'"
+            FAIL=1
+        fi
+        CHECKS=`expr $CHECKS + 1`
+        n=`$RE -l $W/thrprog 2>/dev/null | grep -c "^  HP_TLS "`
+        [ "$n" = 1 ] || { echo "FAIL: a threaded program has $n PT_HP_TLS headers, want 1"; FAIL=1; }
+    else
+        echo "FAIL: linking a threaded program:"; cat $W/link.err; FAIL=1
+    fi
+else
+    echo "FAIL: could not compile the threads fixture:"; cat $W/cc.err; FAIL=1
 fi
 
 # --- the linker stamps what built the file --------------------------------

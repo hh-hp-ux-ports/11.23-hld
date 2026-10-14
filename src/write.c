@@ -423,7 +423,26 @@ int hld_write_exec(hld_link *L)
              */
             if (L->fastbindsec)
                 PUT_PH(PT_HP_FASTBIND, PF_R, L->fastbindsec->off, 0, 0, 0, 1);
-            if (L->has_tls)
+            /*
+             * Thread-local storage is described by PT_HP_TLS, and every
+             * dynamic output carries one -- an empty one when it has no TLS,
+             * as HP ld writes it into every program and library. dld keys on
+             * the executable's: only when the program has an HP_TLS header
+             * does LE_initialize reserve the 16-byte thread control block at
+             * tp+0. Without it the libraries' static TLS starts at offset 0,
+             * libpthread's lands on the word it keeps its own pointer in,
+             * and a threaded program dies at the first pthread_create that
+             * reuses a thread structure (gavial session's dld trace, 11.23
+             * 0712). A static image has no dld; it keeps the generic PT_TLS.
+             */
+            if (L->dynamic)
+                PUT_PH(PT_HP_TLS, PF_R,
+                       L->has_tls ? L->tls_off : 0,
+                       L->has_tls ? L->tls_base : 0,
+                       L->has_tls ? L->tls_filesz : 0,
+                       L->has_tls ? L->tls_memsz : 0,
+                       L->has_tls ? 0x10 : 0);
+            else if (L->has_tls)
                 PUT_PH(PT_TLS, PF_R, L->tls_off, L->tls_base,
                        L->tls_filesz, L->tls_memsz, 0x10);
             if (L->unwind_sec) {

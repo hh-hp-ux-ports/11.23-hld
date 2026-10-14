@@ -712,7 +712,8 @@ int hld_layout(hld_link *L)
         if (!L->fastbindsec) { lerr(L, "out of memory", NULL, NULL); return -1; }
     }
 
-    nphdr = (L->dynamic ? 5 : 3) + (L->has_tls ? 1 : 0)
+    /* a TLS header in every dynamic output, empty or not (see write.c) */
+    nphdr = (L->dynamic ? 5 : 3) + (L->dynamic || L->has_tls ? 1 : 0)
             + (L->unwind_sec ? 1 : 0) + (L->fastbindsec ? 1 : 0);
 
     L->nphdr = nphdr;

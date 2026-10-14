@@ -378,6 +378,17 @@ if $HLD -e _start -o $W/fbexe $W/exit42.o samples/gt1/libshlib.so 2> $W/fb.err &
         n=`$RE -l -S $W/$f | grep -Ec "^  HP_FASTBIND | \.fastbind "`
         [ "$n" = 0 ] || { echo "FAIL: $f has $n fastbind headers/sections, want 0"; FAIL=1; }
     done
+    # Every dynamic output carries a PT_HP_TLS, empty when it has no TLS, as
+    # HP ld's do: dld reserves the thread control block only when the
+    # program has one (the dynamic suite runs threads on the real thing).
+    for f in fbexe fblib.so; do
+        CHECKS=`expr $CHECKS + 1`
+        n=`$RE -l $W/$f | grep -c "^  HP_TLS "`
+        [ "$n" = 1 ] || { echo "FAIL: $f has $n PT_HP_TLS headers, want 1"; FAIL=1; }
+    done
+    CHECKS=`expr $CHECKS + 1`
+    n=`$RE -l $W/det_a | grep -Ec "^  (HP_TLS|TLS) "`
+    [ "$n" = 0 ] || { echo "FAIL: a static program without TLS has $n TLS headers, want 0"; FAIL=1; }
 else
     echo "FAIL: the PT_HP_FASTBIND links did not complete:"; cat $W/fb.err
     FAIL=1
