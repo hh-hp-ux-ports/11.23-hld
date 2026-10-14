@@ -394,6 +394,22 @@ else
     FAIL=1
 fi
 
+# Every input's .comment -- where its compiler records itself -- is carried
+# into the output in order, duplicates and all, as HP ld does, with hld's own
+# stamp after them; hld used to drop them, and with them any way to tell what
+# compiled a binary. Two gcc objects, so two "GCC:" strings.
+CHECKS=`expr $CHECKS + 1`
+if $HLD -b -o $W/cm.so samples/gt1/hello.o samples/gt1/shlib_pic.o 2> $W/cm.err; then
+    ng=`tr -c '[:print:]' '\n' < $W/cm.so | grep -c "^GCC: (GNU) 4.7.4$"`
+    ns=`tr -c '[:print:]' '\n' < $W/cm.so | grep -c "^@(#)hld "`
+    if [ "$ng" != 2 ] || [ "$ns" != 1 ]; then
+        echo "FAIL: .comment carries $ng compiler stamps (want 2) and $ns hld stamps (want 1)"
+        FAIL=1
+    fi
+else
+    echo "FAIL: the .comment link did not complete:"; cat $W/cm.err; FAIL=1
+fi
+
 # --sysroot=DIR moves the default library search (and the millicode
 # archives) under DIR -- for linking an 11.23 program on an 11.31 host --
 # but the run path still names the plain directories, where the target

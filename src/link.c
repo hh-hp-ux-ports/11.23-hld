@@ -100,8 +100,9 @@ int hld_add_ident(hld_link *L)
     osec *o = osec_get(L, ".comment", SHT_PROGBITS, 0);
 
     if (!o) { lerr(L, "out of memory", NULL, NULL); return -1; }
-    o->align = 1;
-    o->size = strlen(HLD_IDENT) + 1;
+    /* after the inputs' own .comment, which the section may already hold */
+    L->ident_off = o->size;
+    o->size += strlen(HLD_IDENT) + 1;
     L->commentsec = o;
     return 0;
 }
@@ -242,13 +243,18 @@ static int collect_sections_of(hld_link *L, hld_elf *e)
              * Debug information is not loaded, but it does have to be
              * carried through and relocated, or the output cannot be
              * debugged at all — and silently so, since nothing about the
-             * link fails. Other non-allocated sections (.comment, the
-             * relocation and symbol tables) are the linker's own business
-             * and are not copied.
+             * link fails. So is .comment, where each compiler records
+             * itself ("GCC: (GNU) 4.7.4"): HP ld concatenates every input's,
+             * in order and without merging duplicates, and dropping them
+             * left no way to tell from a binary what compiled it. hld's own
+             * stamp is appended after them (hld_add_ident). The other
+             * non-allocated sections (relocation and symbol tables) are the
+             * linker's own business and are not copied.
              */
             if (!(sh->flags & SHF_ALLOC)
                 && !(sh->type == SHT_PROGBITS
-                     && strncmp(sh->name, ".debug", 6) == 0))
+                     && (strncmp(sh->name, ".debug", 6) == 0
+                         || strcmp(sh->name, ".comment") == 0)))
                 continue;
             if (sh->type == SHT_GROUP)
                 continue;
@@ -1459,7 +1465,8 @@ int hld_build_contents(hld_link *L)
     }
 
     if (L->commentsec && L->commentsec->data)
-        memcpy(L->commentsec->data, HLD_IDENT, strlen(HLD_IDENT) + 1);
+        memcpy(L->commentsec->data + L->ident_off, HLD_IDENT,
+               strlen(HLD_IDENT) + 1);
 
     /*
      * Fill the linkage tables now that every address is final. A function

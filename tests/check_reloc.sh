@@ -374,7 +374,10 @@ for pair in multi gp rt; do
             >> $W/$pair.rt.err 2>&1 \
        && $HLD -e _start -o $W/${pair}_direct $L/${pair}_a.o $L/${pair}_b.o \
             $L/exit_stub.o >> $W/$pair.rt.err 2>&1; then
-        $CMP $W/${pair}_direct $W/${pair}_via_r > $W/$pair.rt.cmp 2>&1
+        # .comment differs by design: the -r output carries hld's stamp in
+        # its own .comment, and like every input's that is kept, so the
+        # program built through it names the linker twice.
+        $CMP -x .comment $W/${pair}_direct $W/${pair}_via_r > $W/$pair.rt.cmp 2>&1
         if grep -E '^section |^relocs |^header' $W/$pair.rt.cmp > /dev/null; then
             fail "$pair: a program linked from -r output differs from one" \
                  "linked directly:"; cat $W/$pair.rt.cmp
